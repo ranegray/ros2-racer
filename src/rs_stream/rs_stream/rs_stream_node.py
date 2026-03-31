@@ -50,15 +50,16 @@ class RealsenseColorPublisher(Node):
 
     def capture_and_publish(self):
         try:
-            frames = self.pipe.wait_for_frames(timeout_ms=1000)
-            color  = frames.get_color_frame()
+            frames = rs.composite_frame(rs.frame())
+            if not self.pipe.poll_for_frames(frames):
+                return
+            color = frames.get_color_frame()
             if not color:
                 return
             img = np.asanyarray(color.get_data())  # BGR uint8
             msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'camera_color_optical_frame'
-            self.get_logger().info("Published frame successfully.")
             self.pub.publish(msg)
         except Exception as e:
             self.get_logger().warn(f'Frame skip: {e}')

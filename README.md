@@ -22,6 +22,7 @@ To get started with the ROS2 Racer, follow these steps:
     source install/setup.bash
     ```
 5. Launch the ROS2 Racer:
-    ```bash
+    Coming soon!
+    <!--```bash
     ros2 launch ros2_racer racer.launch.py
-    ```
+    ```-->

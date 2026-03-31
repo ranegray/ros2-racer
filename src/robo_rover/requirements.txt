@@ -1,0 +1,4 @@
+pymavlink>=2.4.37
+numpy>=1.21.0
+scipy>=1.7.0
+pyserial>=3.5

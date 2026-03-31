@@ -1,0 +1,12 @@
+paper_config:
+  paper_width: 8.5 # inches
+  paper_height: 11.0 # inches
+  rgb: [ 57, 255, 20 ]
+  hsv: [ 111, 92, 100 ] # degrees, %, %
+  lower_hsv: [ 45, 100, 120 ] # TODO tune these bounds
+  upper_hsv: [ 75, 255, 255 ]
+
+/rgb_node:
+  ros__parameters:
+    paper_config: ${paper_config}
+    debug_topic: /perception/rgb_debug

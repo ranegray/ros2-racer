@@ -1,0 +1,17 @@
+# ROS 2 Build/Install folders
+build/
+install/
+log/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes

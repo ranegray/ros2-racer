@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import time
-import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -46,29 +45,26 @@ class RealsenseColorPublisher(Node):
                 else:
                     raise RuntimeError('Failed to start RealSense pipeline after 5 attempts') from e
 
-        # Run capture loop in a separate thread so the executor stays free
-        self._running = True
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._capture_thread.start()
+        # timer at ~fps
+        self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
 
-    def _capture_loop(self):
-        while self._running:
-            try:
-                frames = self.pipe.wait_for_frames(timeout_ms=1000)
-                color = frames.get_color_frame()
-                if not color:
-                    continue
-                img = np.asanyarray(color.get_data())  # BGR uint8
-                msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
-                msg.header.stamp = self.get_clock().now().to_msg()
-                msg.header.frame_id = 'camera_color_optical_frame'
-                self.pub.publish(msg)
-            except Exception as e:
-                self.get_logger().warn(f'Frame skip: {e}')
+    def capture_and_publish(self):
+        try:
+            frames = self.pipe.wait_for_frames(timeout_ms=1000)
+            color  = frames.get_color_frame()
+            if not color:
+                return
+            img = np.asanyarray(color.get_data())  # BGR uint8
+            msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'camera_color_optical_frame'
+            self.get_logger().info("Published frame successfully.")
+            self.pub.publish(msg)
+        except Exception as e:
+            self.get_logger().warn(f'Frame skip: {e}')
 
     def destroy_node(self):
-        self._running = False
-        self._capture_thread.join(timeout=2)
+        self.timer.cancel()
         try:
             self.pipe.stop()
         except Exception:

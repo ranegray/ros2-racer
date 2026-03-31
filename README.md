@@ -26,3 +26,18 @@ To get started with the ROS2 Racer, follow these steps:
     <!--```bash
     ros2 launch ros2_racer racer.launch.py
     ```-->
+
+## Telemetry Dashboard
+
+React + Vite web dashboard in `telemetry-dashboard/`. Connects to the car via [roslibjs](https://github.com/RobotWebTools/roslibjs) over a rosbridge WebSocket and displays live `racers_msgs/RacerTelemetry` data from `/telemetry/racer`.
+
+```bash
+cd telemetry-dashboard
+npm install
+npm run dev
+```
+
+Requires `rosbridge_server` running on the car:
+```bash
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+```

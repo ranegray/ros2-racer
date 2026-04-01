@@ -18,7 +18,7 @@ function App() {
     const topic = new ROSLIB.Topic({
       ros,
       name: '/telemetry/racer',
-      messageType: 'racers_msgs/RacerTelemetry',
+      messageType: 'racer_msgs/msg/RacerTelemetry',
     })
 
     topic.subscribe((msg) => setTelemetry(msg as object))

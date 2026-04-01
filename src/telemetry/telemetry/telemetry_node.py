@@ -61,9 +61,9 @@ class TelemetryNode(Node):
         self._armed: bool = False
         self._scan: LaserScan | None = None
         self._front_distance: float = 0.0
-        # self._heading_error: float = 0.0
-        # self._internal_state: str = ''
-        # self._obstacle_detection: str = ''
+        self._heading_error: float = 0.0
+        self._internal_state: str = ''
+        self._obstacle_detection: str = ''
         self._color_image: CompressedImage | None = None
 
         # ── subscriptions ─────────────────────────────────────────────────────
@@ -81,12 +81,12 @@ class TelemetryNode(Node):
                                  self._cb_image, 10)
 
         # Optional topics — populated by other nodes when available
-        # self.create_subscription(Float32, '/telemetry/heading_error',
-        #                          self._cb_heading_error, 10)
-        # self.create_subscription(String, '/telemetry/internal_state',
-        #                          self._cb_internal_state, 10)
-        # self.create_subscription(String, '/telemetry/obstacle',
-        #                          self._cb_obstacle, 10)
+        self.create_subscription(Float32, '/telemetry/heading_error',
+                                 self._cb_heading_error, 10)
+        self.create_subscription(String, '/telemetry/internal_state',
+                                 self._cb_internal_state, 10)
+        self.create_subscription(String, '/telemetry/obstacle',
+                                 self._cb_obstacle, 10)
 
         # ── publisher ─────────────────────────────────────────────────────────
         self._pub = self.create_publisher(RacerTelemetry, '/telemetry/racer', 10)

@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
+import cv2
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
 
@@ -10,8 +11,8 @@ class LineDetectorNode(Node):
         super().__init__("line_detector")
 
         # TODO: Sample from real image in basement for an accurate line color range
-        self.color_lower = np.array([0, 150, 0])  # R_min, G_min, B_min
-        self.color_upper = np.array([80, 255, 80])  # R_max, G_max, B_max
+        self.color_lower = np.array([35, 100, 100])  # H_min, S_min, V_min
+        self.color_upper = np.array([85, 255, 255])  # H_max, S_max, V_max
 
         self.image_width = 640
         self.image_height = 480
@@ -44,10 +45,9 @@ class LineDetectorNode(Node):
         y0, y1, x0, x1 = self.crop_area
         cropped = image[y0:y1, x0:x1, :]
 
-        # 3. Filter pixels by color range
-        mask = np.all(
-            (cropped >= self.color_lower) & (cropped <= self.color_upper), axis=2
-        )
+        # 3. Convert to HSV and filter by color range
+        hsv = cv2.cvtColor(cropped, cv2.COLOR_RGB2HSV)
+        mask = cv2.inRange(hsv, self.color_lower, self.color_upper)
 
         # 4. Find centroid of masked area
         ys, xs = np.where(mask)

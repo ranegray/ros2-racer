@@ -50,7 +50,9 @@ class SafetyMonitorNode(Node):
                     Float32, topic, self._make_callback(topic), 10)
             else:
                 self.get_logger().warn(
-                    f'[MONITOR] Unknown topic type for {topic}, skipping staleness watch')
+                    f'[MONITOR] No subscription type registered for topic "{topic}"; '
+                    f'staleness monitoring is DISABLED for this topic. '
+                    f'Add it to the known-topics block in safety_monitor_node.py to enable it.')
 
         self.create_timer(0.5, self._check_staleness)
         self.create_timer(1.0, self._check_rover_alive)

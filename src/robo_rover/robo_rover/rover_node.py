@@ -284,10 +284,12 @@ class ArduPilotRoverNode(Node):
             return
         
         # Try to get SCALED_IMU first (preferred)
-        scaled_imu = self.master.recv_match(type='SCALED_IMU', blocking=False)
+        try:
+            scaled_imu = self.master.recv_match(type='SCALED_IMU', blocking=False)
+        except TypeError:
+            return
         if scaled_imu is not None:
             self.publish_scaled_imu(scaled_imu)
-            return
     
     def publish_scaled_imu(self, scaled_imu_msg):
         # Gyro message

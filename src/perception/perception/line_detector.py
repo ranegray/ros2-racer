@@ -34,7 +34,7 @@ class LineDetectorNode(Node):
         )
 
     def image_callback(self, msg):
-        self.get_logger().info("Received image frame", throttle_duration_sec=2.0)
+        self.get_logger().info("Received image frame")
         # 1. Convert ROS Image to numpy array
         image = np.frombuffer(msg.data, dtype=np.uint8).reshape(
             msg.height, msg.width, 3

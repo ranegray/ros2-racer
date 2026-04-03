@@ -1,3 +1,4 @@
+import os
 import signal
 import subprocess
 import threading
@@ -14,7 +15,7 @@ class RoverProcessManager:
         self._lock = threading.Lock()
 
     def spawn(self) -> None:
-        """Start rover_node as a child subprocess."""
+        """Start rover_node as a child subprocess in its own process group."""
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 raise RuntimeError('rover_node is already running; call kill() first')
@@ -23,11 +24,12 @@ class RoverProcessManager:
                 '--ros-args',
                 '-p', f'connection_string:={self._connection_string}',
                 '-p', f'baud_rate:={self._baud_rate}',
-            ])
+            ], start_new_session=True)
 
     def kill(self) -> None:
-        """Stop rover_node cleanly. SIGINT first (triggers rover's shutdown handler
-        which sends zero velocity and disarms), SIGKILL after 3s if needed.
+        """Stop rover_node cleanly. SIGINT sent to the entire process group
+        (ros2 wrapper + rover_node child) triggers rover's shutdown handler
+        which sends zero velocity and disarms. SIGKILL after 3s if needed.
 
         Safe to call concurrently: only one caller will perform the actual
         termination; subsequent callers see _proc=None and return immediately.
@@ -37,11 +39,21 @@ class RoverProcessManager:
             self._proc = None
         if proc is None:
             return
-        proc.send_signal(signal.SIGINT)  # triggers KeyboardInterrupt → disarm + zero vel
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            return  # Already dead
+        try:
+            os.killpg(pgid, signal.SIGINT)  # kills ros2 wrapper + rover_node child
+        except ProcessLookupError:
+            pass
         try:
             proc.wait(timeout=3.0)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait()
 
     def is_alive(self) -> bool:

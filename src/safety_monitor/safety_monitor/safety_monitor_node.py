@@ -140,10 +140,13 @@ class SafetyMonitorNode(Node):
 
     def _keyboard_loop(self) -> None:
         while rclpy.ok():
-            ready, _, _ = select.select([self._tty], [], [], 0.1)
+            tty = self._tty
+            if tty is None:
+                break
+            ready, _, _ = select.select([tty], [], [], 0.1)
             if not ready:
                 continue
-            ch = self._tty.read(1)
+            ch = tty.read(1)
             if ch == ' ':
                 with self._state_lock:
                     s = self._state

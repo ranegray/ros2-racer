@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import atexit
+import os
 import select
 import sys
 import termios
@@ -57,18 +58,23 @@ class SafetyMonitorNode(Node):
         self.create_timer(0.5, self._check_staleness)
         self.create_timer(1.0, self._check_rover_alive)
 
-        # Set terminal to cbreak mode: single-keypress, no echo, Ctrl+C still works
-        self._original_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
-        tty.setcbreak(sys.stdin.fileno())
-        atexit.register(self._restore_terminal)
-
         self._rover.spawn()
-        self.get_logger().info(
-            '[MONITOR] Safety monitor started. Press SPACE to e-stop.')
 
-        self._keyboard_thread = threading.Thread(
-            target=self._keyboard_loop, daemon=True)
-        self._keyboard_thread.start()
+        if os.isatty(sys.stdin.fileno()):
+            # Set terminal to cbreak mode: single-keypress, no echo, Ctrl+C still works
+            self._original_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
+            tty.setcbreak(sys.stdin.fileno())
+            atexit.register(self._restore_terminal)
+            self._keyboard_thread = threading.Thread(
+                target=self._keyboard_loop, daemon=True)
+            self._keyboard_thread.start()
+            self.get_logger().info(
+                '[MONITOR] Safety monitor started. Press SPACE to e-stop.')
+        else:
+            self._original_terminal_settings = None
+            self.get_logger().warn(
+                '[MONITOR] stdin is not a TTY; keyboard e-stop disabled. '
+                'Staleness detection and rover lifecycle management are active.')
 
     # ------------------------------------------------------------------
     # Subscription callback factory
@@ -148,9 +154,10 @@ class SafetyMonitorNode(Node):
 
     def _restore_terminal(self) -> None:
         try:
-            termios.tcsetattr(
-                sys.stdin.fileno(), termios.TCSADRAIN,
-                self._original_terminal_settings)
+            if self._original_terminal_settings is not None:
+                termios.tcsetattr(
+                    sys.stdin.fileno(), termios.TCSADRAIN,
+                    self._original_terminal_settings)
         except Exception:
             pass
 

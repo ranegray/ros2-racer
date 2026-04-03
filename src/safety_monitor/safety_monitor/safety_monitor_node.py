@@ -98,6 +98,8 @@ class SafetyMonitorNode(Node):
                 return
             self._state = MonitorState.ESTOP
         self._rover.kill()
+        if self._tty is not None:
+            termios.tcflush(self._tty.fileno(), termios.TCIFLUSH)
         print(f'\n[E-STOP] {reason}')
         print('[E-STOP] Press Enter to restart robo_rover...')
 
@@ -106,6 +108,8 @@ class SafetyMonitorNode(Node):
             if self._state != MonitorState.ESTOP:
                 return
             self._state = MonitorState.RUNNING
+        if self._tty is not None:
+            termios.tcflush(self._tty.fileno(), termios.TCIFLUSH)
         print('[MONITOR] Restarting robo_rover...')
         self._rover.spawn()
         print('[MONITOR] robo_rover restarted.')

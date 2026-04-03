@@ -1,3 +1,4 @@
+import signal
 import subprocess
 import threading
 from typing import Optional
@@ -25,7 +26,8 @@ class RoverProcessManager:
             ])
 
     def kill(self) -> None:
-        """Terminate rover_node. SIGTERM first, SIGKILL after 2s if needed.
+        """Stop rover_node cleanly. SIGINT first (triggers rover's shutdown handler
+        which sends zero velocity and disarms), SIGKILL after 3s if needed.
 
         Safe to call concurrently: only one caller will perform the actual
         termination; subsequent callers see _proc=None and return immediately.
@@ -35,9 +37,9 @@ class RoverProcessManager:
             self._proc = None
         if proc is None:
             return
-        proc.terminate()
+        proc.send_signal(signal.SIGINT)  # triggers KeyboardInterrupt → disarm + zero vel
         try:
-            proc.wait(timeout=2.0)
+            proc.wait(timeout=3.0)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()

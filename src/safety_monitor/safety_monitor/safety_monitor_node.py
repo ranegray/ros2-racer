@@ -60,20 +60,23 @@ class SafetyMonitorNode(Node):
 
         self._rover.spawn()
 
-        if os.isatty(sys.stdin.fileno()):
-            # Set terminal to cbreak mode: single-keypress, no echo, Ctrl+C still works
-            self._original_terminal_settings = termios.tcgetattr(sys.stdin.fileno())
-            tty.setcbreak(sys.stdin.fileno())
+        # Open /dev/tty directly — works even when ros2 launch redirects stdin,
+        # because child processes still share the controlling terminal.
+        try:
+            self._tty = open('/dev/tty', 'r')
+            self._original_terminal_settings = termios.tcgetattr(self._tty.fileno())
+            tty.setcbreak(self._tty.fileno())
             atexit.register(self._restore_terminal)
             self._keyboard_thread = threading.Thread(
                 target=self._keyboard_loop, daemon=True)
             self._keyboard_thread.start()
             self.get_logger().info(
                 '[MONITOR] Safety monitor started. Press SPACE to e-stop.')
-        else:
+        except (OSError, termios.error):
+            self._tty = None
             self._original_terminal_settings = None
             self.get_logger().warn(
-                '[MONITOR] stdin is not a TTY; keyboard e-stop disabled. '
+                '[MONITOR] No controlling terminal; keyboard e-stop disabled. '
                 'Staleness detection and rover lifecycle management are active.')
 
     # ------------------------------------------------------------------
@@ -133,10 +136,10 @@ class SafetyMonitorNode(Node):
 
     def _keyboard_loop(self) -> None:
         while rclpy.ok():
-            ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            ready, _, _ = select.select([self._tty], [], [], 0.1)
             if not ready:
                 continue
-            ch = sys.stdin.read(1)
+            ch = self._tty.read(1)
             if ch == ' ':
                 with self._state_lock:
                     s = self._state
@@ -154,10 +157,12 @@ class SafetyMonitorNode(Node):
 
     def _restore_terminal(self) -> None:
         try:
-            if self._original_terminal_settings is not None:
+            if self._tty is not None and self._original_terminal_settings is not None:
                 termios.tcsetattr(
-                    sys.stdin.fileno(), termios.TCSADRAIN,
+                    self._tty.fileno(), termios.TCSADRAIN,
                     self._original_terminal_settings)
+                self._tty.close()
+                self._tty = None
         except Exception:
             pass
 

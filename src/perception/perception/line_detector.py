@@ -16,8 +16,8 @@ class LineDetectorNode(Node):
         self.image_width = 640
         self.image_height = 480
         self.crop_area = (
-            60,
-            120,
+            360,
+            480,
             0,
             self.image_width,
         )  # y_start, y_end, x_start, x_end

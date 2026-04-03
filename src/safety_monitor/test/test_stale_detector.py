@@ -45,4 +45,11 @@ def test_multiple_topics_first_stale_returned():
     d.record_message('/b')
     time.sleep(0.1)
     result = d.check_stale()
-    assert result in ('/a', '/b')
+    assert result == '/a'
+
+
+def test_record_message_unknown_topic_is_noop():
+    """Recording a message for an unknown topic does not raise."""
+    d = StaleDetector(['/goal_point'], timeout=1.0)
+    d.record_message('/unknown_topic')  # must not raise
+    assert d.check_stale() is None

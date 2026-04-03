@@ -12,6 +12,8 @@ class RoverProcessManager:
 
     def spawn(self) -> None:
         """Start rover_node as a child subprocess."""
+        if self._proc is not None and self._proc.poll() is None:
+            raise RuntimeError('rover_node is already running; call kill() first')
         self._proc = subprocess.Popen([
             'ros2', 'run', 'robo_rover', 'rover_node',
             '--ros-args',
@@ -28,10 +30,7 @@ class RoverProcessManager:
             self._proc.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
             self._proc.kill()
-            try:
-                self._proc.wait()
-            except subprocess.TimeoutExpired:
-                pass
+            self._proc.wait()
         self._proc = None
 
     def is_alive(self) -> bool:

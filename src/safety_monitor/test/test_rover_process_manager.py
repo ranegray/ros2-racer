@@ -57,7 +57,11 @@ def test_kill_sigkills_on_timeout():
     with patch('safety_monitor.rover_process_manager.subprocess.Popen') as mock_popen:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd='ros2', timeout=2.0)
+        # First wait() raises TimeoutExpired, second wait() (after kill) succeeds
+        mock_proc.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd='ros2', timeout=2.0),
+            None,
+        ]
         mock_popen.return_value = mock_proc
         mgr = RoverProcessManager('/dev/ttyACM1', 115200)
         mgr.spawn()
@@ -80,3 +84,15 @@ def test_is_alive_false_after_kill():
         mgr.spawn()
         mgr.kill()
         assert mgr.is_alive() is False
+
+
+def test_spawn_raises_if_already_running():
+    with patch('safety_monitor.rover_process_manager.subprocess.Popen') as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # still running
+        mock_popen.return_value = mock_proc
+        mgr = RoverProcessManager('/dev/ttyACM1', 115200)
+        mgr.spawn()
+        import pytest
+        with pytest.raises(RuntimeError):
+            mgr.spawn()

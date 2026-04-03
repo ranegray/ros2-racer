@@ -14,6 +14,8 @@ class StaleDetector:
 
     def record_message(self, topic: str) -> None:
         """Call this in a topic subscription callback."""
+        if topic not in self._last_received:
+            return
         self._last_received[topic] = time.time()
         self._ever_received[topic] = True
 

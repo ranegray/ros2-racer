@@ -18,7 +18,10 @@ class SnapNode(Node):
         cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
         pipe.start(cfg)
 
-        # grab one frame
+        # let auto-exposure warm up
+        for _ in range(30):
+            pipe.wait_for_frames()
+
         frames = pipe.wait_for_frames()
         color = frames.get_color_frame()
         pipe.stop()
@@ -40,7 +43,7 @@ class SnapNode(Node):
         self.pub.publish(self.msg)
         self.count += 1
         self.get_logger().info(f'Published snap ({self.count})')
-        if self.count >= 30:  # ~3 seconds of republishing
+        if self.count >= 150:  # ~15 seconds of republishing
             self.timer.cancel()
             raise SystemExit
 

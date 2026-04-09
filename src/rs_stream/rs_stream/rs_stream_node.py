@@ -25,13 +25,13 @@ class RealsenseColorPublisher(Node):
         if len(devices) > 0:
             time.sleep(3)  # wait for device to re-enumerate on USB
 
-        self.pipe = rs.pipeline()
-        cfg = rs.config()
-        cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
-
-        # Retry pipeline start in case device is still re-enumerating
+        # Retry pipeline start — recreate pipeline/config each attempt
+        # so they pick up the freshly re-enumerated device
         for attempt in range(5):
             try:
+                self.pipe = rs.pipeline()
+                cfg = rs.config()
+                cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
                 self.get_logger().info(
                     f"Starting RealSense pipeline (attempt {attempt + 1}/5)…"
                 )

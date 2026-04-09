@@ -10,9 +10,8 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        # TODO: Sample from real image in basement for an accurate line color range
-        self.color_lower = np.array([95, 150, 130])  # H_min, S_min, V_min
-        self.color_upper = np.array([115, 255, 255])  # H_max, S_max, V_max
+        self.color_lower = np.array([96, 139, 185])  # H_min, S_min, V_min
+        self.color_upper = np.array([116, 239, 255])  # H_max, S_max, V_max
 
         self.image_width = 640
         self.image_height = 480

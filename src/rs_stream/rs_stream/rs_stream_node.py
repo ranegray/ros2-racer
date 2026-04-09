@@ -36,6 +36,7 @@ class RealsenseColorPublisher(Node):
                     f"Starting RealSense pipeline (attempt {attempt + 1}/5)…"
                 )
                 self.pipe.start(cfg)
+                self.get_logger().info("RealSense pipeline started successfully")
                 break
             except RuntimeError as e:
                 self.get_logger().warn(f"Pipeline start failed: {e}")
@@ -45,6 +46,8 @@ class RealsenseColorPublisher(Node):
                     raise RuntimeError(
                         "Failed to start RealSense pipeline after 5 attempts"
                     ) from e
+
+        self.frame_count = 0
 
         # timer at ~fps
         self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
@@ -60,6 +63,11 @@ class RealsenseColorPublisher(Node):
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = "camera_color_optical_frame"
             self.pub.publish(msg)
+            self.frame_count += 1
+            if self.frame_count % 30 == 0:
+                self.get_logger().info(
+                    f"{self.frame_count} frames published at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}"
+                )
         except Exception as e:
             self.get_logger().warn(f"Frame skip: {e}")
 

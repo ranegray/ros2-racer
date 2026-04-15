@@ -63,7 +63,7 @@ class RealsenseColorPublisher(Node):
 
         settings = [
             (rs.option.enable_auto_exposure, 0),
-            (rs.option.exposure, 156),
+            (rs.option.exposure, 300),
             (rs.option.enable_auto_white_balance, 0),
             (rs.option.white_balance, 4600),
         ]

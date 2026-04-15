@@ -48,7 +48,7 @@ class LineDetectorNode(Node):
         cropped = image[y0:y1, x0:x1, :]
 
         # 3. Convert to HSV and filter by color range
-        hsv = cv2.cvtColor(cropped, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.color_lower, self.color_upper)
 
         # 4. Find centroid of masked area

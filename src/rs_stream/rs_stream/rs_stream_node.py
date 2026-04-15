@@ -36,6 +36,7 @@ class RealsenseColorPublisher(Node):
                     f"Starting RealSense pipeline (attempt {attempt + 1}/5)…"
                 )
                 self.pipe.start(cfg)
+                self._configure_color_sensor()
                 self.get_logger().info("RealSense pipeline started successfully")
                 break
             except RuntimeError as e:
@@ -51,6 +52,27 @@ class RealsenseColorPublisher(Node):
 
         # timer at ~fps
         self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
+
+    def _configure_color_sensor(self):
+        # Lock exposure and white balance so HSV thresholds stay stable.
+        try:
+            sensor = self.pipe.get_active_profile().get_device().first_color_sensor()
+        except Exception as e:
+            self.get_logger().warn(f"Could not get color sensor: {e}")
+            return
+
+        settings = [
+            (rs.option.enable_auto_exposure, 0),
+            (rs.option.exposure, 156),
+            (rs.option.enable_auto_white_balance, 0),
+            (rs.option.white_balance, 4600),
+        ]
+        for opt, val in settings:
+            try:
+                if sensor.supports(opt):
+                    sensor.set_option(opt, val)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to set {opt}: {e}")
 
     def capture_and_publish(self):
         try:

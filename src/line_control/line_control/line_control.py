@@ -53,10 +53,11 @@ class LineControlNode(Node):
             self.publisher_.publish(cmd)
             return
 
-        # Normalized lateral offset from image center: [-1, 1]
-        # Positive = line is right of center -> steer right (negative angular.z in REP-103)
+        # Normalized lateral offset from target column: [-1, 1]
+        # Positive = line is right of target. This rover uses +angular.z = right turn
+        # (see green_control), so steer has the same sign as offset.
         offset = (px - self.target_x) / self.image_center_x
-        steer = -self.steering_kp * offset
+        steer = self.steering_kp * offset
         cmd.angular.z = max(-1.0, min(1.0, steer))
         cmd.linear.x = self.drive_speed
 

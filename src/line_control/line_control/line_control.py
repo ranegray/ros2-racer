@@ -19,6 +19,7 @@ class LineControlNode(Node):
         # Control parameters
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
+        self.target_x = 400.0         # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.2        # proportional gain on normalized pixel offset
         self.drive_speed = 0.4        # fixed forward speed (m/s)
         self.goal_timeout = 1.0       # stop if no goal received for this long (s)
@@ -54,7 +55,7 @@ class LineControlNode(Node):
 
         # Normalized lateral offset from image center: [-1, 1]
         # Positive = line is right of center -> steer right (negative angular.z in REP-103)
-        offset = (px - self.image_center_x) / self.image_center_x
+        offset = (px - self.target_x) / self.image_center_x
         steer = -self.steering_kp * offset
         cmd.angular.z = max(-1.0, min(1.0, steer))
         cmd.linear.x = self.drive_speed

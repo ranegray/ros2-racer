@@ -21,7 +21,7 @@ class LineControlNode(Node):
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0         # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.0        # proportional gain on normalized pixel offset
-        self.drive_speed = 0.2        # fixed forward speed (m/s)
+        self.drive_speed = 0.4        # fixed forward speed (m/s)
         self.goal_timeout = 1.0       # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

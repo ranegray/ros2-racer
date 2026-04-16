@@ -17,6 +17,7 @@ function App() {
   const [image, setImage] = useState<CompressedImage | null>(null)
   const [imageArrivedAt, setImageArrivedAt] = useState(0)
   const bufferRef = useRef<Sample[]>([])
+  const lastFrameAtRef = useRef<number>(0)
 
   useEffect(() => {
     const ros = new ROSLIB.Ros({ url: ROS_URL })
@@ -39,14 +40,15 @@ function App() {
       setSamples(next)
     })
 
-    // Camera on its own topic with cbor-raw so JPEG bytes ship as binary
-    // (no base64 bloat, no atob on the client). roslib delivers `data` as
-    // Uint8Array under cbor-raw.
+    // Camera on its own topic. Use `cbor` (not `cbor-raw`): we get the full
+    // message structure with `data` delivered as a Uint8Array — no base64,
+    // no atob, and format/header fields preserved. `cbor-raw` would only
+    // ship the raw bytes of a single uint8[] field and drop the envelope.
     const cameraTopic = new ROSLIB.Topic({
       ros,
       name: '/telemetry/camera',
       messageType: 'sensor_msgs/msg/CompressedImage',
-      compression: 'cbor-raw',
+      compression: 'cbor',
       queue_length: 1,
       throttle_rate: 0,
     })
@@ -55,7 +57,11 @@ function App() {
       // Diagnostic: verify frame arrival + payload shape in the browser console.
       // Remove once camera is stable.
       const d = img?.data
+      const now = Date.now()
+      const deltaMs = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0
+      lastFrameAtRef.current = now
       console.debug('[camera] frame', {
+        deltaMs,
         format: img?.format,
         dataType: typeof d,
         isUint8: d instanceof Uint8Array,
@@ -70,7 +76,7 @@ function App() {
                 : 'unknown',
       })
       setImage(img)
-      setImageArrivedAt(Date.now())
+      setImageArrivedAt(now)
     })
 
     return () => {

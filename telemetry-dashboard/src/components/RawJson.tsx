@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { RacerTelemetry } from '../telemetry'
 
 type Props = { msg: RacerTelemetry | null }
 
-export function RawJson({ msg }: Props) {
+export const RawJson = memo(function RawJson({ msg }: Props) {
   const [open, setOpen] = useState(false)
 
   // Only stringify when the user actually has the panel open — otherwise we
@@ -24,4 +24,4 @@ export function RawJson({ msg }: Props) {
       {open && <pre>{text}</pre>}
     </details>
   )
-}
+})

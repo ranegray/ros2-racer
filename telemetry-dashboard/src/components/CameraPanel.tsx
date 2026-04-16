@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { CompressedImage } from '../telemetry'
 
 type Props = {
@@ -8,38 +8,61 @@ type Props = {
   stalenessMs?: number
 }
 
-function mimeFor(format: string): string {
-  const f = format.toLowerCase()
+function mimeFor(format: string | undefined): string {
+  const f = format?.toLowerCase() ?? ''
   if (f.includes('png')) return 'image/png'
   return 'image/jpeg'
 }
 
-export function CameraPanel({ image, arrivedAt, stalenessMs = 1000 }: Props) {
-  // Drive the <img> imperatively via blob URLs so the browser's
-  // decoded-image cache (keyed by URL) can't accumulate an entry per frame:
-  // each blob URL is revoked when the next frame arrives.
-  const imgRef = useRef<HTMLImageElement | null>(null)
+function toBuffer(data: string | Uint8Array | ArrayBuffer): ArrayBuffer {
+  if (typeof data === 'string') {
+    return Uint8Array.from(atob(data), (c) => c.charCodeAt(0)).buffer as ArrayBuffer
+  }
+  if (data instanceof ArrayBuffer) return data
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer as ArrayBuffer
+}
+
+export const CameraPanel = memo(function CameraPanel({ image, arrivedAt, stalenessMs = 1000 }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const hasFrameRef = useRef(false)
+  const [hasFrame, setHasFrame] = useState(false)
+
+  // Decode each frame with createImageBitmap (off-main-thread) and paint to a
+  // canvas in a single drawImage call. This avoids the <img src> swap flicker:
+  // the canvas bitmap is only replaced once the new frame is fully decoded.
   useEffect(() => {
-    const img = imgRef.current
-    if (!img || !image?.data) return
-    // With cbor-raw, `data` is already a Uint8Array / ArrayBuffer, so Blob
-    // can take it directly. Under default JSON compression it's a base64
-    // string and we decode via atob.
-    // Normalize to a fresh ArrayBuffer so Blob's BlobPart type is unambiguous
-    // (guards against SharedArrayBuffer-backed views).
-    const d = image.data
-    let buffer: ArrayBuffer
-    if (typeof d === 'string') {
-      buffer = Uint8Array.from(atob(d), (c) => c.charCodeAt(0)).buffer as ArrayBuffer
-    } else if (d instanceof ArrayBuffer) {
-      buffer = d
-    } else {
-      const view = new Uint8Array(d.buffer, d.byteOffset, d.byteLength)
-      buffer = view.slice().buffer as ArrayBuffer
+    if (!image?.data) return
+    let cancelled = false
+    const blob = new Blob([toBuffer(image.data)], { type: mimeFor(image.format) })
+    createImageBitmap(blob)
+      .then((bitmap) => {
+        if (cancelled) {
+          bitmap.close()
+          return
+        }
+        const canvas = canvasRef.current
+        if (!canvas) {
+          bitmap.close()
+          return
+        }
+        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+          canvas.width = bitmap.width
+          canvas.height = bitmap.height
+        }
+        const ctx = canvas.getContext('2d')
+        if (ctx) ctx.drawImage(bitmap, 0, 0)
+        bitmap.close()
+        if (!hasFrameRef.current) {
+          hasFrameRef.current = true
+          setHasFrame(true)
+        }
+      })
+      .catch(() => {
+        /* decode failed — drop this frame */
+      })
+    return () => {
+      cancelled = true
     }
-    const url = URL.createObjectURL(new Blob([buffer], { type: mimeFor(image.format) }))
-    img.src = url
-    return () => URL.revokeObjectURL(url)
   }, [image])
 
   const [now, setNow] = useState(() => Date.now())
@@ -50,20 +73,19 @@ export function CameraPanel({ image, arrivedAt, stalenessMs = 1000 }: Props) {
 
   const stale = !image || arrivedAt === 0 || now - arrivedAt > stalenessMs
   const age = arrivedAt ? ((now - arrivedAt) / 1000).toFixed(1) : '—'
-  const hasImage = !!image?.data
 
   return (
     <section className="panel camera-panel">
       <div className="panel-header">
         <h2>Camera</h2>
         <span className={`badge ${stale ? 'badge-stale' : 'badge-live'}`}>
-          {image ? `${image.format.split(';')[0] || 'jpeg'} · ${age}s ago` : 'no frames'}
+          {image ? `${image.format?.split(';')[0] || 'jpeg'} · ${age}s ago` : 'no frames'}
         </span>
       </div>
       <div className={`camera-frame ${stale ? 'stale' : ''}`}>
-        <img ref={imgRef} alt="camera frame" style={{ display: hasImage ? 'block' : 'none' }} />
-        {!hasImage && <div className="camera-placeholder">Waiting for frames…</div>}
+        <canvas ref={canvasRef} />
+        {!hasFrame && <div className="camera-placeholder">Waiting for frames…</div>}
       </div>
     </section>
   )
-}
+})

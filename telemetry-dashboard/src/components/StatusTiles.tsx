@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { RacerTelemetry } from '../telemetry'
 
 type Props = {
@@ -40,7 +41,7 @@ function Tile({ label, value, tone }: { label: string; value: string; tone: Tone
   )
 }
 
-export function StatusTiles({ connected, latest }: Props) {
+export const StatusTiles = memo(function StatusTiles({ connected, latest }: Props) {
   const tone: Tone = connected ? 'ok' : 'bad'
   return (
     <div className="tiles">
@@ -71,4 +72,4 @@ export function StatusTiles({ connected, latest }: Props) {
       />
     </div>
   )
-}
+})

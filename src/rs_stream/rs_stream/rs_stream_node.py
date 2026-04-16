@@ -52,7 +52,6 @@ class RealsenseColorPublisher(Node):
             msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'camera_color_optical_frame'
-            self.get_logger().info("Published frame successfully.")
             self.pub.publish(msg)
         except Exception as e:
             self.get_logger().warn(f'Frame skip: {e}')

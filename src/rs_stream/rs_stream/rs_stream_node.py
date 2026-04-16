@@ -59,8 +59,8 @@ class RealsenseColorPublisher(Node):
             self._frame_count += 1
             if self._frame_count % self._heartbeat_interval == 0:
                 self.get_logger().info(f'RealSense streaming OK ({self._frame_count} frames published)')
-        except Exception as e:
-            self.get_logger().warn(f'Frame skip: {e}')
+        except Exception:
+            pass  # transient frame drop; heartbeat will surface if camera goes silent
 
     def destroy_node(self):
         self.timer.cancel()

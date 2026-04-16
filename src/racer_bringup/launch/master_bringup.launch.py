@@ -54,7 +54,12 @@ def generate_launch_description():
     telemetry_rate_arg = DeclareLaunchArgument(
         'telemetry_rate',
         default_value='10.0',
-        description='Telemetry publish rate in Hz',
+        description='Scalar telemetry publish rate in Hz',
+    )
+    camera_rate_arg = DeclareLaunchArgument(
+        'camera_rate',
+        default_value='5.0',
+        description='Camera frame publish rate in Hz',
     )
     image_quality_arg = DeclareLaunchArgument(
         'image_quality',
@@ -116,6 +121,7 @@ def generate_launch_description():
         name='telemetry_node',
         parameters=[{
             'publish_rate': LaunchConfiguration('telemetry_rate'),
+            'camera_rate': LaunchConfiguration('camera_rate'),
             'image_quality': LaunchConfiguration('image_quality'),
         }],
         output='screen',
@@ -139,6 +145,7 @@ def generate_launch_description():
         rover_port_arg,
         rover_baudrate_arg,
         telemetry_rate_arg,
+        camera_rate_arg,
         image_quality_arg,
 
         # Startup banner

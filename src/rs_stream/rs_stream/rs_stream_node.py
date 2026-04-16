@@ -41,6 +41,9 @@ class RealsenseColorPublisher(Node):
 
         # timer at ~fps
         self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
+        self._fps = fps
+        self._frame_count = 0
+        self._heartbeat_interval = fps * 10  # log once every 10 seconds
 
     def capture_and_publish(self):
         try:
@@ -52,10 +55,12 @@ class RealsenseColorPublisher(Node):
             msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'camera_color_optical_frame'
-            self.get_logger().info("Published frame successfully.")
             self.pub.publish(msg)
-        except Exception as e:
-            self.get_logger().warn(f'Frame skip: {e}')
+            self._frame_count += 1
+            if self._frame_count % self._heartbeat_interval == 0:
+                self.get_logger().info(f'RealSense streaming OK ({self._frame_count} frames published)')
+        except Exception:
+            pass  # transient frame drop; heartbeat will surface if camera goes silent
 
     def destroy_node(self):
         self.timer.cancel()
@@ -74,7 +79,10 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

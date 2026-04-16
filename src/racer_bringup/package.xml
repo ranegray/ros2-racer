@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>racer_bringup</name>
+  <version>0.0.0</version>
+  <description>Master bringup launch file for the Phase 1 ROS2 Racer hardware and infrastructure stack</description>
+  <maintainer email="rane.gray@colorado.edu">student</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rplidar_ros</exec_depend>
+  <exec_depend>rs_stream</exec_depend>
+  <exec_depend>robo_rover</exec_depend>
+  <exec_depend>telemetry</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -22,10 +22,38 @@ To get started with the ROS2 Racer, follow these steps:
     source install/setup.bash
     ```
 5. Launch the ROS2 Racer:
-    Coming soon!
-    <!--```bash
-    ros2 launch ros2_racer racer.launch.py
-    ```-->
+    ```bash
+    ros2 launch racer_bringup master_bringup.launch.py
+    ```
+
+## Phase 1 Bringup
+
+The `racer_bringup` package provides a single launch file that starts the entire Phase 1 hardware and infrastructure stack:
+
+```bash
+ros2 launch racer_bringup master_bringup.launch.py
+```
+
+This starts the following nodes in order:
+
+| Node | Package | Topics |
+|------|---------|--------|
+| `rplidar_node` | `rplidar_ros` | publishes `/scan` |
+| `rs_stream_node` | `rs_stream` | publishes `/camera/color/image_raw` |
+| `rover_node` | `robo_rover` | publishes `/imu/gyro`, `/imu/accel`, `/rover/armed`; subscribes `/cmd_vel` |
+| *(E-Stop — not yet implemented)* | — | — |
+| `telemetry_node` | `telemetry` | publishes `/telemetry/racer` at 10 Hz |
+| rosbridge WebSocket | `rosbridge_server` | WebSocket on port 9090 |
+
+Hardware ports can be overridden at launch time:
+
+```bash
+ros2 launch racer_bringup master_bringup.launch.py \
+    lidar_port:=/dev/ttyUSB0 \
+    rover_port:=/dev/ttyACM1
+```
+
+Once all nodes are up the car is fully ready to receive commands (`/cmd_vel`) and broadcast telemetry to the dashboard.
 
 ## Telemetry Dashboard
 
@@ -37,7 +65,4 @@ npm install
 npm run dev
 ```
 
-Requires `rosbridge_server` running on the car:
-```bash
-ros2 launch rosbridge_server rosbridge_websocket_launch.xml
-```
+`rosbridge_server` is started automatically by `master_bringup.launch.py`. No separate terminal needed.

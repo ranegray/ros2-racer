@@ -65,7 +65,11 @@ class TelemetryNode(Node):
         self._heading_error: float = 0.0
         self._internal_state: str = ''
         self._obstacle_detection: str = ''
-        self._color_image: CompressedImage | None = None
+        # Cache the raw Image; encode JPEG only in the camera publish timer so
+        # we do one encode per published frame instead of one per incoming
+        # frame. A single-threaded rclpy executor gets monopolized otherwise
+        # and delays the 5 Hz timer, producing burst-then-stall on the wire.
+        self._latest_image: Image | None = None
 
         # ── subscriptions ─────────────────────────────────────────────────────
         self.create_subscription(Vector3, 'imu/gyro',
@@ -126,20 +130,8 @@ class TelemetryNode(Node):
         self._front_distance = msg.data
 
     def _cb_image(self, msg: Image):
-        """Convert raw Image → JPEG CompressedImage to keep bandwidth low."""
-        try:
-            cv_img = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
-            ok, buf = cv2.imencode('.jpg', cv_img, encode_params)
-            if not ok:
-                return
-            compressed = CompressedImage()
-            compressed.header = msg.header
-            compressed.format = 'jpeg'
-            compressed.data = buf.tobytes()
-            self._color_image = compressed
-        except Exception as e:
-            self.get_logger().warn(f'Image conversion failed: {e}', throttle_duration_sec=5.0)
+        """Latest-value cache only. JPEG encoding happens in the publish timer."""
+        self._latest_image = msg
 
     def _cb_heading_error(self, msg: Float32):
         self._heading_error = msg.data
@@ -171,8 +163,22 @@ class TelemetryNode(Node):
         self._pub.publish(msg)
 
     def _publish_camera(self):
-        if self._color_image is not None:
-            self._cam_pub.publish(self._color_image)
+        img = self._latest_image
+        if img is None:
+            return
+        try:
+            cv_img = self._bridge.imgmsg_to_cv2(img, desired_encoding='bgr8')
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
+            ok, buf = cv2.imencode('.jpg', cv_img, encode_params)
+            if not ok:
+                return
+            compressed = CompressedImage()
+            compressed.header = img.header
+            compressed.format = 'jpeg'
+            compressed.data = buf.tobytes()
+            self._cam_pub.publish(compressed)
+        except Exception as e:
+            self.get_logger().warn(f'Image encode failed: {e}', throttle_duration_sec=5.0)
 
 
 def main(args=None):

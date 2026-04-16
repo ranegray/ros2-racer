@@ -52,6 +52,23 @@ function App() {
     })
     cameraTopic.subscribe((raw) => {
       const img = raw as unknown as CompressedImage
+      // Diagnostic: verify frame arrival + payload shape in the browser console.
+      // Remove once camera is stable.
+      const d = img?.data
+      console.debug('[camera] frame', {
+        format: img?.format,
+        dataType: typeof d,
+        isUint8: d instanceof Uint8Array,
+        isArrayBuffer: d instanceof ArrayBuffer,
+        byteLength:
+          typeof d === 'string'
+            ? d.length
+            : d instanceof Uint8Array
+              ? d.byteLength
+              : d instanceof ArrayBuffer
+                ? d.byteLength
+                : 'unknown',
+      })
       setImage(img)
       setImageArrivedAt(Date.now())
     })

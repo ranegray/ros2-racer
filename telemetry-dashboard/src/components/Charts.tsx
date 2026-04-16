@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import type { AlignedData } from 'uplot'
 import type { Sample } from '../telemetry'
 import { Sparkline } from './Sparkline'
@@ -15,7 +15,7 @@ function series(samples: Sample[], pick: (s: Sample) => number): AlignedData {
   return [xs, ys]
 }
 
-export function Charts({ samples }: Props) {
+export const Charts = memo(function Charts({ samples }: Props) {
   const front = useMemo(() => series(samples, (s) => s.front_distance), [samples])
   const heading = useMemo(() => series(samples, (s) => s.heading_error), [samples])
   const yaw = useMemo(() => series(samples, (s) => s.gyro_z), [samples])
@@ -35,4 +35,4 @@ export function Charts({ samples }: Props) {
       </div>
     </section>
   )
-}
+})

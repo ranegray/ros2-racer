@@ -49,7 +49,7 @@ class TelemetryNode(Node):
         super().__init__('telemetry_node')
 
         self.declare_parameter('publish_rate', 10.0)
-        self.declare_parameter('camera_rate', 20.0)
+        self.declare_parameter('camera_rate', 30.0)
         self.declare_parameter('image_quality', 50)   # JPEG quality 0-100
 
         rate = self.get_parameter('publish_rate').value

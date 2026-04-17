@@ -54,9 +54,6 @@ class DepthNode(Node):
 
         dist_msg = Float32()
         dist_msg.data = dist_to_front_obstacle
-        self.get_logger().info(
-            f"[depth_node] Distance to front obstacle: {dist_to_front_obstacle:.2f} m"
-        )
         self.obstacle_dist_pub.publish(dist_msg)
 
 

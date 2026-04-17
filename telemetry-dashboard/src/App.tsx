@@ -2,38 +2,97 @@ import { useEffect, useRef, useState } from 'react'
 import * as ROSLIB from 'roslib'
 import { CameraPanel } from './components/CameraPanel'
 import { Charts } from './components/Charts'
+import { LidarPolar } from './components/LidarPolar'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { CompressedImage, RacerTelemetry, Sample } from './telemetry'
+import type { CompressedImage, LaserScan, RacerTelemetry, Sample } from './telemetry'
 import { BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
-const ROS_URL = 'ws://100.86.204.127:9090'
+const DEFAULT_ROS_URL = 'ws://100.86.204.127:9090'
+const RECONNECT_MS = 2000
+const TELEMETRY_STALE_MS = 500
+
+function resolveRosUrl(): string {
+  // Priority: ?ros=ws://... in URL > VITE_ROS_URL env > hardcoded fallback.
+  // The query param makes it trivial to point a browser tab at a different
+  // robot without rebuilding; the env var covers deployments.
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('ros')
+    if (fromQuery) return fromQuery
+  } catch {
+    /* non-browser env */
+  }
+  const fromEnv = (import.meta.env.VITE_ROS_URL as string | undefined) ?? ''
+  return fromEnv || DEFAULT_ROS_URL
+}
+
+function hasFlag(name: string): boolean {
+  try {
+    return new URLSearchParams(window.location.search).has(name)
+  } catch {
+    return false
+  }
+}
 
 function App() {
+  const [rosUrl] = useState(resolveRosUrl)
+  // Bisection toggles: ?nocam, ?noscan, ?notel disable individual subscriptions
+  // without a rebuild. Use these to isolate a memory/perf source.
+  const [disableCamera] = useState(() => hasFlag('nocam'))
+  const [disableScan] = useState(() => hasFlag('noscan'))
+  const [disableTelemetry] = useState(() => hasFlag('notel'))
   const [connected, setConnected] = useState(false)
   const [latest, setLatest] = useState<RacerTelemetry | null>(null)
   const [samples, setSamples] = useState<Sample[]>([])
-  const [image, setImage] = useState<CompressedImage | null>(null)
   const [imageArrivedAt, setImageArrivedAt] = useState(0)
+  const [imageFormat, setImageFormat] = useState<string | null>(null)
+  const [scan, setScan] = useState<LaserScan | null>(null)
+  const [scanArrivedAt, setScanArrivedAt] = useState(0)
+  const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
   const bufferRef = useRef<Sample[]>([])
-  const lastFrameAtRef = useRef<number>(0)
+  // Camera frames bypass React state: at 30 Hz, routing ~20 KB Uint8Arrays
+  // through setState ramps Chrome's tab memory by tens of MB/s (off-heap,
+  // invisible to JS heap snapshots — likely React retaining state snapshots
+  // across renders). CameraPanel registers a paint fn here on mount and we
+  // call it synchronously from the subscribe callback.
+  const cameraPaintRef = useRef<((raw: CompressedImage) => void) | null>(null)
 
   useEffect(() => {
-    const ros = new ROSLIB.Ros({ url: ROS_URL })
+    const ros = new ROSLIB.Ros({ url: rosUrl })
+    let reconnectTimer: number | null = null
+    let disposed = false
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer !== null) return
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null
+        if (!disposed) ros.connect(rosUrl)
+      }, RECONNECT_MS)
+    }
 
     ros.on('connection', () => setConnected(true))
-    ros.on('close', () => setConnected(false))
-    ros.on('error', () => setConnected(false))
-
-    const telemetryTopic = new ROSLIB.Topic({
-      ros,
-      name: '/telemetry/racer',
-      messageType: 'racer_msgs/msg/RacerTelemetry',
+    ros.on('close', () => {
+      setConnected(false)
+      scheduleReconnect()
     })
-    telemetryTopic.subscribe((raw) => {
+    ros.on('error', () => {
+      setConnected(false)
+      scheduleReconnect()
+    })
+
+    const telemetryTopic = disableTelemetry
+      ? null
+      : new ROSLIB.Topic({
+          ros,
+          name: '/telemetry/racer',
+          messageType: 'racer_msgs/msg/RacerTelemetry',
+        })
+    telemetryTopic?.subscribe((raw) => {
       const msg = raw as unknown as RacerTelemetry
       setLatest(msg)
+      setTelemetryArrivedAt(Date.now())
       const next = bufferRef.current.slice(-(BUFFER_LEN - 1))
       next.push(toSample(msg))
       bufferRef.current = next
@@ -44,62 +103,81 @@ function App() {
     // message structure with `data` delivered as a Uint8Array — no base64,
     // no atob, and format/header fields preserved. `cbor-raw` would only
     // ship the raw bytes of a single uint8[] field and drop the envelope.
-    const cameraTopic = new ROSLIB.Topic({
-      ros,
-      name: '/telemetry/camera',
-      messageType: 'sensor_msgs/msg/CompressedImage',
-      compression: 'cbor',
-      queue_length: 1,
-      throttle_rate: 0,
+    const cameraTopic = disableCamera
+      ? null
+      : new ROSLIB.Topic({
+          ros,
+          name: '/telemetry/camera',
+          messageType: 'sensor_msgs/msg/CompressedImage',
+          compression: 'cbor',
+          queue_length: 1,
+          throttle_rate: 0,
+        })
+    cameraTopic?.subscribe((raw) => {
+      const msg = raw as unknown as CompressedImage
+      cameraPaintRef.current?.(msg)
+      setImageArrivedAt(Date.now())
+      setImageFormat((prev) => (prev === msg.format ? prev : msg.format))
     })
-    cameraTopic.subscribe((raw) => {
-      const img = raw as unknown as CompressedImage
-      // Diagnostic: verify frame arrival + payload shape in the browser console.
-      // Remove once camera is stable.
-      const d = img?.data
-      const now = Date.now()
-      const deltaMs = lastFrameAtRef.current ? now - lastFrameAtRef.current : 0
-      lastFrameAtRef.current = now
-      console.debug('[camera] frame', {
-        deltaMs,
-        format: img?.format,
-        dataType: typeof d,
-        isUint8: d instanceof Uint8Array,
-        isArrayBuffer: d instanceof ArrayBuffer,
-        byteLength:
-          typeof d === 'string'
-            ? d.length
-            : d instanceof Uint8Array
-              ? d.byteLength
-              : d instanceof ArrayBuffer
-                ? d.byteLength
-                : 'unknown',
-      })
-      setImage(img)
-      setImageArrivedAt(now)
+
+    const scanTopic = disableScan
+      ? null
+      : new ROSLIB.Topic({
+          ros,
+          name: '/scan',
+          messageType: 'sensor_msgs/msg/LaserScan',
+          compression: 'cbor',
+          queue_length: 1,
+          throttle_rate: 0,
+        })
+    scanTopic?.subscribe((raw) => {
+      setScan(raw as unknown as LaserScan)
+      setScanArrivedAt(Date.now())
     })
 
     return () => {
-      telemetryTopic.unsubscribe()
-      cameraTopic.unsubscribe()
+      disposed = true
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
+      telemetryTopic?.unsubscribe()
+      cameraTopic?.unsubscribe()
+      scanTopic?.unsubscribe()
       ros.close()
     }
+  }, [rosUrl, disableCamera, disableScan, disableTelemetry])
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500)
+    return () => window.clearInterval(id)
   }, [])
+
+  const telemetryStale =
+    telemetryArrivedAt === 0 || now - telemetryArrivedAt > TELEMETRY_STALE_MS
+  const telemetryAge = telemetryArrivedAt
+    ? ((now - telemetryArrivedAt) / 1000).toFixed(1)
+    : null
 
   return (
     <div className="dashboard">
       <header className="dashboard-header">
         <h1>Racer Telemetry</h1>
-        <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-          <span className="status-dot" />
-          {connected ? 'Connected' : 'Disconnected'}
+        <div className="header-status">
+          {connected && telemetryAge !== null && (
+            <span className={`badge ${telemetryStale ? 'badge-stale' : 'badge-live'}`}>
+              telemetry · {telemetryAge}s ago
+            </span>
+          )}
+          <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
+            <span className="status-dot" />
+            {connected ? 'Connected' : 'Disconnected'}
+          </div>
         </div>
       </header>
 
       <StatusTiles connected={connected} latest={latest} />
 
       <div className="dashboard-grid">
-        <CameraPanel image={image} arrivedAt={imageArrivedAt} />
+        <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />
+        <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
         <Charts samples={samples} />
       </div>
 

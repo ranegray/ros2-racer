@@ -12,6 +12,19 @@ export type CompressedImage = {
   data: string | Uint8Array | ArrayBuffer
 }
 
+export type LaserScan = {
+  header: { stamp: RosTime; frame_id: string }
+  angle_min: number
+  angle_max: number
+  angle_increment: number
+  time_increment: number
+  scan_time: number
+  range_min: number
+  range_max: number
+  ranges: number[]
+  intensities: number[]
+}
+
 export type RacerTelemetry = {
   header: { stamp: RosTime; frame_id: string }
   gyro: RosVec3

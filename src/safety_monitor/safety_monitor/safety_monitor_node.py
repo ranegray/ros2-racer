@@ -60,7 +60,7 @@ class SafetyMonitorNode(Node):
 
         self._rover.spawn()
 
-        # Open /dev/tty directly — works even when ros2 launch redirects stdin,
+        # Open /dev/tty directly - works even when ros2 launch redirects stdin,
         # because child processes still share the controlling terminal.
         try:
             self._tty = open('/dev/tty', 'r')

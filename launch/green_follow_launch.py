@@ -52,7 +52,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Safety monitor — owns rover_node subprocess, e-stop, staleness detection
+        # Safety monitor - owns rover_node subprocess, e-stop, staleness detection
         Node(
             package='safety_monitor',
             executable='safety_monitor_node',

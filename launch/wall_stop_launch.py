@@ -56,7 +56,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Perception — depth from LIDAR
+        # Perception - depth from LIDAR
         Node(
             package='perception',
             executable='depth_node',
@@ -64,7 +64,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Autonomy — wall nav controller
+        # Autonomy - wall nav controller
         Node(
             package='autonomy',
             executable='wall_nav_node',
@@ -72,7 +72,7 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Safety monitor — owns rover_node subprocess, e-stop, staleness detection
+        # Safety monitor - owns rover_node subprocess, e-stop, staleness detection
         Node(
             package='safety_monitor',
             executable='safety_monitor_node',

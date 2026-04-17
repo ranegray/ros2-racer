@@ -3,7 +3,7 @@
 <package format="3">
   <name>safety_monitor</name>
   <version>0.0.0</version>
-  <description>Safety monitor node — e-stop, staleness detection, rover lifecycle</description>
+  <description>Safety monitor node - e-stop, staleness detection, rover lifecycle</description>
   <maintainer email="student@example.com">student</maintainer>
   <license>MIT</license>
 

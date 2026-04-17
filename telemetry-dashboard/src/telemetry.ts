@@ -28,7 +28,7 @@ export type Sample = {
   front_distance: number
   heading_error: number
   gyro_z: number
-  accel_mag: number
+  accel_x: number
 }
 
 export const BUFFER_LEN = 200
@@ -38,12 +38,13 @@ export function stampToSeconds(stamp: RosTime): number {
 }
 
 export function toSample(msg: RacerTelemetry): Sample {
-  const a = msg.accel
   return {
     t: stampToSeconds(msg.header.stamp) || Date.now() / 1000,
     front_distance: msg.front_distance,
     heading_error: msg.heading_error,
     gyro_z: msg.gyro.z,
-    accel_mag: Math.hypot(a.x, a.y, a.z),
+    // Forward-axis linear acceleration. Magnitude would be dominated by gravity
+    // on the z-axis (~9.8 m/s² at rest), so we report the body-x component.
+    accel_x: msg.accel.x,
   }
 }

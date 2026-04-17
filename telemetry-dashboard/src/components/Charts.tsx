@@ -19,7 +19,7 @@ export const Charts = memo(function Charts({ samples }: Props) {
   const front = useMemo(() => series(samples, (s) => s.front_distance), [samples])
   const heading = useMemo(() => series(samples, (s) => s.heading_error), [samples])
   const yaw = useMemo(() => series(samples, (s) => s.gyro_z), [samples])
-  const accel = useMemo(() => series(samples, (s) => s.accel_mag), [samples])
+  const accel = useMemo(() => series(samples, (s) => s.accel_x), [samples])
 
   return (
     <section className="panel charts-panel">
@@ -31,7 +31,7 @@ export const Charts = memo(function Charts({ samples }: Props) {
         <Sparkline label="Front distance" unit="m" color="#22c55e" data={front} />
         <Sparkline label="Heading error" unit="rad" color="#c084fc" data={heading} />
         <Sparkline label="Yaw rate" unit="rad/s" color="#38bdf8" data={yaw} />
-        <Sparkline label="|Accel|" unit="m/s²" color="#f59e0b" data={accel} />
+        <Sparkline label="Forward accel" unit="m/s²" color="#f59e0b" data={accel} />
       </div>
     </section>
   )

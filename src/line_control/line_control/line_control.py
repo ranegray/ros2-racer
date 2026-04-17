@@ -27,7 +27,7 @@ class LineControlNode(Node):
         self.steering_kp = 1.25          # proportional gain on normalized near-band offset
         self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
         self.base_speed = 0.3            # forward speed on a straight (m/s)
-        self.min_speed = 0.12            # forward speed in tightest corner / lookahead-only mode
+        self.min_speed = 0.18            # forward speed in tightest corner / lookahead-only mode
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

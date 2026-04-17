@@ -24,10 +24,8 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.25          # proportional gain on blended near/far offset
+        self.steering_kp = 1.25          # proportional gain on normalized near-band offset
         self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
-        self.near_weight = 0.7           # weight on near-band offset in steering blend
-        self.far_weight = 0.3            # weight on far-band offset (anticipates curves)
         self.base_speed = 0.3            # forward speed on a straight (m/s)
         self.min_speed = 0.22            # forward speed in tightest corner / lookahead-only mode
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
@@ -63,20 +61,16 @@ class LineControlNode(Node):
             return
 
         if near is not None:
-            near_offset = (near[0] - self.target_x) / self.image_center_x
+            # Primary case: steer from near band, slow down if far band disagrees.
+            offset = (near[0] - self.target_x) / self.image_center_x
+            steer = self.steering_kp * offset
 
             if far is not None:
-                far_offset = (far[0] - self.target_x) / self.image_center_x
-                # Blend near (current position) and far (lookahead) so curves are
-                # anticipated before the near band sees them.
-                blended = self.near_weight * near_offset + self.far_weight * far_offset
-                steer = self.steering_kp * blended
                 curvature = abs(far[0] - near[0]) / self.image_center_x
                 curvature = min(1.0, curvature)
                 speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
             else:
                 # Line has exited the far band — we're likely mid-corner, slow down.
-                steer = self.steering_kp * near_offset
                 speed = self.min_speed
         else:
             # Near band lost the line but far band still sees it: line is about to

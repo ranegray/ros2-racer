@@ -5,10 +5,11 @@ Phase 1 master bringup launch file.
 Brings up the full hardware and infrastructure stack in a single command:
   1. LIDAR        (rplidar_ros  → /scan)
   2. RealSense    (rs_stream    → /camera/color/image_raw)
-  3. Hardware Bridge (robo_rover → /imu/*, /rover/armed, subscribes /cmd_vel)
-  4. E-Stop       (TODO: not yet implemented)
-  5. Telemetry    (telemetry    → /telemetry/racer)
-  6. rosbridge    (rosbridge_server WebSocket on port 9090)
+  3. Perception   (depth_node   → /perception/front_distance)
+  4. Hardware Bridge (robo_rover → /imu/*, /rover/armed, subscribes /cmd_vel)
+  5. E-Stop       (TODO: not yet implemented)
+  6. Telemetry    (telemetry    → /telemetry/racer)
+  7. rosbridge    (rosbridge_server WebSocket on port 9090)
 
 Usage:
     ros2 launch racer_bringup master_bringup.launch.py
@@ -96,7 +97,15 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Hardware Bridge ───────────────────────────────────────────────────
+    # ── 3. Perception (lidar-derived front distance) ─────────────────────────
+    depth_node = Node(
+        package='perception',
+        executable='depth_node',
+        name='depth_node',
+        output='screen',
+    )
+
+    # ── 4. Hardware Bridge ───────────────────────────────────────────────────
     rover_node = Node(
         executable='python3',
         arguments=['-m', 'robo_rover.rover_node'],
@@ -111,10 +120,10 @@ def generate_launch_description():
         }],
     )
 
-    # ── 4. E-Stop ────────────────────────────────────────────────────────────
+    # ── 5. E-Stop ────────────────────────────────────────────────────────────
     # TODO: E-Stop node — not yet implemented
 
-    # ── 5. Telemetry Aggregator ──────────────────────────────────────────────
+    # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
     telemetry_node = Node(
         package='telemetry',
         executable='telemetry_node',
@@ -127,7 +136,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 6. rosbridge WebSocket server ────────────────────────────────────────
+    # ── 7. rosbridge WebSocket server ────────────────────────────────────────
     rosbridge_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -154,6 +163,7 @@ def generate_launch_description():
         # Nodes (sensors first, bridge, then aggregators/infrastructure)
         lidar_node,
         realsense_node,
+        depth_node,
         rover_node,
         telemetry_node,
         rosbridge_launch,

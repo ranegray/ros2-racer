@@ -52,6 +52,9 @@ class RealsenseColorPublisher(Node):
 
         # timer at ~fps
         self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
+        self._fps = fps
+        self._frame_count = 0
+        self._heartbeat_interval = fps * 10  # log once every 10 seconds
 
     def _configure_color_sensor(self):
         # Lock exposure and white balance so HSV thresholds stay stable.
@@ -110,7 +113,10 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

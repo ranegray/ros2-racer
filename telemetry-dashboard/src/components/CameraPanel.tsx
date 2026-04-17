@@ -1,9 +1,13 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type RefObject } from 'react'
 import type { CompressedImage } from '../telemetry'
 
 type Props = {
-  image: CompressedImage | null
-  /** wall-clock ms when the latest frame arrived on the dashboard (Date.now()) */
+  /** Mutated by CameraPanel on mount to register its paint fn. The App's ROS
+   *  subscribe callback invokes this directly so camera bytes never enter
+   *  React state (doing so leaks Chrome tab memory at 30 Hz). */
+  paintRef: RefObject<((raw: CompressedImage) => void) | null>
+  format: string | null
+  /** wall-clock ms when the latest frame arrived (Date.now()) */
   arrivedAt: number
   stalenessMs?: number
 }
@@ -22,48 +26,60 @@ function toBuffer(data: string | Uint8Array | ArrayBuffer): ArrayBuffer {
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer as ArrayBuffer
 }
 
-export const CameraPanel = memo(function CameraPanel({ image, arrivedAt, stalenessMs = 1000 }: Props) {
+export const CameraPanel = memo(function CameraPanel({
+  paintRef,
+  format,
+  arrivedAt,
+  stalenessMs = 1000,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const hasFrameRef = useRef(false)
   const [hasFrame, setHasFrame] = useState(false)
+  const pendingRef = useRef<CompressedImage | null>(null)
+  const decodingRef = useRef(false)
 
-  // Decode each frame with createImageBitmap (off-main-thread) and paint to a
-  // canvas in a single drawImage call. This avoids the <img src> swap flicker:
-  // the canvas bitmap is only replaced once the new frame is fully decoded.
   useEffect(() => {
-    if (!image?.data) return
-    let cancelled = false
-    const blob = new Blob([toBuffer(image.data)], { type: mimeFor(image.format) })
-    createImageBitmap(blob)
-      .then((bitmap) => {
-        if (cancelled) {
+    // Drop-old-frames backpressure: only one createImageBitmap in flight at a
+    // time; newer frames overwrite the pending slot. Without this, a decode
+    // that runs slower than the 30 Hz input accumulates Blobs off-heap.
+    const drain = async () => {
+      decodingRef.current = true
+      while (pendingRef.current) {
+        const frame = pendingRef.current
+        pendingRef.current = null
+        const blob = new Blob([toBuffer(frame.data)], { type: mimeFor(frame.format) })
+        try {
+          const bitmap = await createImageBitmap(blob)
+          const canvas = canvasRef.current
+          if (canvas) {
+            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+              canvas.width = bitmap.width
+              canvas.height = bitmap.height
+            }
+            const ctx = canvas.getContext('2d')
+            if (ctx) ctx.drawImage(bitmap, 0, 0)
+          }
           bitmap.close()
-          return
+          if (!hasFrameRef.current) {
+            hasFrameRef.current = true
+            setHasFrame(true)
+          }
+        } catch {
+          /* decode failed — drop this frame */
         }
-        const canvas = canvasRef.current
-        if (!canvas) {
-          bitmap.close()
-          return
-        }
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width
-          canvas.height = bitmap.height
-        }
-        const ctx = canvas.getContext('2d')
-        if (ctx) ctx.drawImage(bitmap, 0, 0)
-        bitmap.close()
-        if (!hasFrameRef.current) {
-          hasFrameRef.current = true
-          setHasFrame(true)
-        }
-      })
-      .catch(() => {
-        /* decode failed — drop this frame */
-      })
-    return () => {
-      cancelled = true
+      }
+      decodingRef.current = false
     }
-  }, [image])
+
+    paintRef.current = (raw) => {
+      pendingRef.current = raw
+      if (!decodingRef.current) drain()
+    }
+    return () => {
+      paintRef.current = null
+      pendingRef.current = null
+    }
+  }, [paintRef])
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -71,7 +87,7 @@ export const CameraPanel = memo(function CameraPanel({ image, arrivedAt, stalene
     return () => window.clearInterval(id)
   }, [])
 
-  const stale = !image || arrivedAt === 0 || now - arrivedAt > stalenessMs
+  const stale = !hasFrame || arrivedAt === 0 || now - arrivedAt > stalenessMs
   const age = arrivedAt ? ((now - arrivedAt) / 1000).toFixed(1) : '—'
 
   return (
@@ -79,7 +95,7 @@ export const CameraPanel = memo(function CameraPanel({ image, arrivedAt, stalene
       <div className="panel-header">
         <h2>Camera</h2>
         <span className={`badge ${stale ? 'badge-stale' : 'badge-live'}`}>
-          {image ? `${image.format?.split(';')[0] || 'jpeg'} · ${age}s ago` : 'no frames'}
+          {hasFrame ? `${format?.split(';')[0] || 'jpeg'} · ${age}s ago` : 'no frames'}
         </span>
       </div>
       <div className={`camera-frame ${stale ? 'stale' : ''}`}>

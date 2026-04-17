@@ -59,7 +59,7 @@ def generate_launch_description():
     )
     camera_rate_arg = DeclareLaunchArgument(
         'camera_rate',
-        default_value='5.0',
+        default_value='30.0',
         description='Camera frame publish rate in Hz',
     )
     image_quality_arg = DeclareLaunchArgument(

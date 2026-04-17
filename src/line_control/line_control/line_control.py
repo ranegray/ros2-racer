@@ -24,7 +24,7 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 0.7           # proportional gain on normalized near-band offset
+        self.steering_kp = 1.25          # proportional gain on normalized near-band offset
         self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
         self.base_speed = 0.3            # forward speed on a straight (m/s)
         self.min_speed = 0.22            # forward speed in tightest corner / lookahead-only mode

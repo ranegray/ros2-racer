@@ -7,10 +7,14 @@ from geometry_msgs.msg import Twist, PointStamped
 class LineControlNode(Node):
     def __init__(self):
         super().__init__('line_control_node')
-        self.latest_goal = None
+        self.latest_near = None
+        self.latest_far = None
 
-        self.subscriber = self.create_subscription(
-            PointStamped, "line_goal_point", self.goal_callback, 10
+        self.near_sub = self.create_subscription(
+            PointStamped, "line_goal_point", self._near_callback, 10
+        )
+        self.far_sub = self.create_subscription(
+            PointStamped, "line_goal_point_far", self._far_callback, 10
         )
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
 
@@ -19,52 +23,68 @@ class LineControlNode(Node):
         # Control parameters
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
-        self.target_x = 400.0         # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.25       # proportional gain on normalized pixel offset
-        self.drive_speed = 0.3        # fixed forward speed (m/s)
-        self.goal_timeout = 1.0       # stop if no goal received for this long (s)
+        self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
+        self.steering_kp = 1.25          # proportional gain on normalized near-band offset
+        self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
+        self.base_speed = 0.3            # forward speed on a straight (m/s)
+        self.min_speed = 0.12            # forward speed in tightest corner / lookahead-only mode
+        self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")
 
-    def goal_callback(self, msg):
-        self.latest_goal = msg
+    def _near_callback(self, msg):
+        self.latest_near = msg
+
+    def _far_callback(self, msg):
+        self.latest_far = msg
+
+    def _extract(self, msg):
+        """Return (x, y) in pixels if msg is fresh and non-empty, else None."""
+        if msg is None:
+            return None
+        now = self.get_clock().now()
+        age = (now - rclpy.time.Time.from_msg(msg.header.stamp)).nanoseconds / 1e9
+        if age > self.goal_timeout:
+            return None
+        if msg.point.x == 0.0 and msg.point.y == 0.0:
+            return None
+        return (msg.point.x, msg.point.y)
 
     def control_loop(self):
         cmd = Twist()
 
-        if self.latest_goal is None:
+        near = self._extract(self.latest_near)
+        far = self._extract(self.latest_far)
+
+        if near is None and far is None:
             self.publisher_.publish(cmd)
             return
 
-        now = self.get_clock().now()
-        goal_time = rclpy.time.Time.from_msg(self.latest_goal.header.stamp)
-        age = (now - goal_time).nanoseconds / 1e9
-        if age > self.goal_timeout:
-            self.get_logger().info("Line goal stale, stopping.")
-            self.publisher_.publish(cmd)
-            return
+        if near is not None:
+            # Primary case: steer from near band, slow down if far band disagrees.
+            offset = (near[0] - self.target_x) / self.image_center_x
+            steer = self.steering_kp * offset
 
-        px = self.latest_goal.point.x  # pixel x of line centroid
-        py = self.latest_goal.point.y  # pixel y of line centroid
+            if far is not None:
+                curvature = abs(far[0] - near[0]) / self.image_center_x
+                curvature = min(1.0, curvature)
+                speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
+            else:
+                # Line has exited the far band — we're likely mid-corner, slow down.
+                speed = self.min_speed
+        else:
+            # Near band lost the line but far band still sees it: line is about to
+            # re-enter view through a corner. Steer aggressively toward it at min speed.
+            offset = (far[0] - self.target_x) / self.image_center_x
+            steer = self.lookahead_steering_kp * offset
+            speed = self.min_speed
 
-        # line_detector publishes an empty PointStamped (0,0,0) when no line is found
-        if px == 0.0 and py == 0.0:
-            self.get_logger().info("No line detected, stopping.")
-            self.publisher_.publish(cmd)
-            return
-
-        # Normalized lateral offset from target column: [-1, 1]
-        # Positive = line is right of target. This rover uses +angular.z = right turn
-        # (see green_control), so steer has the same sign as offset.
-        offset = (px - self.target_x) / self.image_center_x
-        steer = self.steering_kp * offset
         cmd.angular.z = max(-1.0, min(1.0, steer))
-        cmd.linear.x = self.drive_speed
-
+        cmd.linear.x = speed
         self.publisher_.publish(cmd)
         self.get_logger().debug(
-            f"Driving: speed={cmd.linear.x:.2f}, steer={cmd.angular.z:.2f}, "
-            f"px={px:.0f}, offset={offset:.2f}"
+            f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "
+            f"near={near} far={far}"
         )
 
 

@@ -70,12 +70,12 @@ class LineDetectorNode(Node):
 
         self.image_width = 640
         self.image_height = 480
-        self.crop_area = (
-            300,
-            480,
-            0,
-            self.image_width,
-        )  # y_start, y_end, x_start, x_end
+
+        # Two horizontal ROIs: near band drives steering, far band provides
+        # lookahead for curvature-adaptive speed and corner-entry fallback.
+        # Format: (y_start, y_end, x_start, x_end)
+        self.near_band = (400, 480, 0, self.image_width)
+        self.far_band = (300, 380, 0, self.image_width)
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -84,7 +84,8 @@ class LineDetectorNode(Node):
         self.debug_interval = 30  # publish debug image every N frames
 
     def _setup_publishers(self):
-        self.point_pub = self.create_publisher(PointStamped, "line_goal_point", 10)
+        self.near_point_pub = self.create_publisher(PointStamped, "line_goal_point", 10)
+        self.far_point_pub = self.create_publisher(PointStamped, "line_goal_point_far", 10)
         self.debug_img_pub = self.create_publisher(Image, "line_detector/debug_image", 1)
 
     def _setup_subscribers(self):
@@ -97,43 +98,41 @@ class LineDetectorNode(Node):
             msg.height, msg.width, 3
         )
 
-        y0, y1, x0, x1 = self.crop_area
-        cropped = image[y0:y1, x0:x1, :]
+        near_mask, near_centroid = self._detect_in_band(image, self.near_band)
+        far_mask, far_centroid = self._detect_in_band(image, self.far_band)
 
-        hsv = bgr_to_hsv(cropped)
-        mask = np.all((hsv >= self.color_lower) & (hsv <= self.color_upper), axis=-1)
-
-        ys, xs = np.where(mask)
-
-        cX, cY = None, None
-        if len(xs) > 0:
-            cX = int(np.mean(xs)) + x0
-            cY = int(np.mean(ys)) + y0
-            self._publish_point(cX, cY, msg.header)
-        else:
-            no_target = PointStamped()
-            no_target.header.stamp = msg.header.stamp
-            no_target.header.frame_id = "camera_color_optical_frame"
-            self.point_pub.publish(no_target)
+        self._publish_point(self.near_point_pub, near_centroid, msg.header)
+        self._publish_point(self.far_point_pub, far_centroid, msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:
-            self._publish_debug_image(image, mask, y0, y1, x0, x1, cX, cY, msg.header, int(mask.sum()))
+            self._publish_debug_image(
+                image, near_mask, far_mask, near_centroid, far_centroid, msg.header
+            )
 
-    def _publish_debug_image(self, image, mask, y0, y1, x0, x1, cX, cY, header, pixel_count):
+    def _detect_in_band(self, image, band):
+        y0, y1, x0, x1 = band
+        cropped = image[y0:y1, x0:x1, :]
+        hsv = bgr_to_hsv(cropped)
+        mask = np.all((hsv >= self.color_lower) & (hsv <= self.color_upper), axis=-1)
+
+        centroid = None
+        ys, xs = np.where(mask)
+        if len(xs) > 0:
+            centroid = (int(np.mean(xs)) + x0, int(np.mean(ys)) + y0)
+        return mask, centroid
+
+    def _publish_debug_image(self, image, near_mask, far_mask, near_c, far_c, header):
         debug = image.copy()
 
-        draw_rectangle(debug, x0, y0, x1, y1, (255, 255, 0), thickness=2)
+        # Near band = yellow, far band = cyan; red dot = near centroid, magenta = far.
+        self._overlay_band(debug, self.near_band, near_mask, box_color=(255, 255, 0))
+        self._overlay_band(debug, self.far_band, far_mask, box_color=(255, 255, 0))
 
-        # Overlay mask in green on the crop region (0.7 base + 0.3 green where masked).
-        region = debug[y0:y1, x0:x1].astype(np.float32)
-        overlay = np.zeros_like(region)
-        overlay[..., 1] = mask.astype(np.float32) * 255.0
-        blended = region * 0.7 + overlay * 0.3
-        debug[y0:y1, x0:x1] = np.clip(blended, 0, 255).astype(np.uint8)
-
-        if cX is not None:
-            draw_filled_circle(debug, cX, cY, 10, (0, 0, 255))
+        if near_c is not None:
+            draw_filled_circle(debug, near_c[0], near_c[1], 10, (0, 0, 255))
+        if far_c is not None:
+            draw_filled_circle(debug, far_c[0], far_c[1], 8, (255, 0, 255))
 
         debug_msg = Image()
         debug_msg.header = header
@@ -144,19 +143,27 @@ class LineDetectorNode(Node):
         self.debug_img_pub.publish(debug_msg)
         self.get_logger().info(
             f"Debug image published (frame {self.frame_count}, "
-            f"mask_pixels={pixel_count}, centroid={cX},{cY})"
+            f"near_px={int(near_mask.sum())}, far_px={int(far_mask.sum())}, "
+            f"near={near_c}, far={far_c})"
         )
 
-    def _publish_point(self, x, y, header):
+    def _overlay_band(self, debug, band, mask, box_color):
+        y0, y1, x0, x1 = band
+        draw_rectangle(debug, x0, y0, x1, y1, box_color, thickness=2)
+        region = debug[y0:y1, x0:x1].astype(np.float32)
+        overlay = np.zeros_like(region)
+        overlay[..., 1] = mask.astype(np.float32) * 255.0
+        blended = region * 0.7 + overlay * 0.3
+        debug[y0:y1, x0:x1] = np.clip(blended, 0, 255).astype(np.uint8)
+
+    def _publish_point(self, publisher, centroid, header):
         point_msg = PointStamped()
         point_msg.header.stamp = header.stamp
         point_msg.header.frame_id = "camera_color_optical_frame"
-        point_msg.point.x = float(x)
-        point_msg.point.y = float(y)
-        point_msg.point.z = 0.0
-
-        self.point_pub.publish(point_msg)
-        self.get_logger().info(f"Published point: x={x}, y={y}")
+        if centroid is not None:
+            point_msg.point.x = float(centroid[0])
+            point_msg.point.y = float(centroid[1])
+        publisher.publish(point_msg)
 
 
 def main(args=None):

@@ -75,7 +75,7 @@ class LineDetectorNode(Node):
         # lookahead for curvature-adaptive speed and corner-entry fallback.
         # Format: (y_start, y_end, x_start, x_end)
         self.near_band = (360, 480, 0, self.image_width)
-        self.far_band = (200, 280, 0, self.image_width)
+        self.far_band = (140, 300, 0, self.image_width)
 
         self._setup_subscribers()
         self._setup_publishers()

@@ -29,7 +29,7 @@ class LineControlNode(Node):
         self.near_weight = 0.35          # weight on near-band offset in steering blend
         self.far_weight = 0.65           # weight on far-band offset — heavier so turning anticipates the curve
         self.base_speed = 0.3            # forward speed on a straight (m/s)
-        self.min_speed = 0.25            # forward speed in tightest corner / lookahead-only mode
+        self.min_speed = 0.22            # forward speed in tightest corner / lookahead-only mode
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

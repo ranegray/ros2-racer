@@ -65,7 +65,7 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        self.color_lower = np.array([95, 70, 60])     # H_min, S_min, V_min
+        self.color_lower = np.array([95, 110, 60])    # H_min, S_min, V_min
         self.color_upper = np.array([130, 255, 255])  # H_max, S_max, V_max
 
         self.image_width = 640

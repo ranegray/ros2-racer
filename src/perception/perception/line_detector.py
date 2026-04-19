@@ -90,8 +90,8 @@ class LineDetectorNode(Node):
         self.debug_interval = 30  # publish debug image every N frames
 
     def _setup_publishers(self):
-        self.near_point_pub = self.create_publisher(PointStamped, "line_goal_point", 10)
-        self.far_point_pub = self.create_publisher(PointStamped, "line_goal_point_far", 10)
+        self.follow_point_pub = self.create_publisher(PointStamped, "line_follow_point", 10)
+        self.turn_point_pub = self.create_publisher(PointStamped, "line_turn_point", 10)
         self.debug_img_pub = self.create_publisher(Image, "line_detector/debug_image", 1)
 
     def _setup_subscribers(self):
@@ -106,8 +106,8 @@ class LineDetectorNode(Node):
 
         mask, follow_centroid, turn_target = self._detect(image)
 
-        self._publish_point(self.near_point_pub, follow_centroid, msg.header)
-        self._publish_point(self.far_point_pub, turn_target, msg.header)
+        self._publish_point(self.follow_point_pub, follow_centroid, msg.header)
+        self._publish_point(self.turn_point_pub, turn_target, msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:

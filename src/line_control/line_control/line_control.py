@@ -26,8 +26,10 @@ class LineControlNode(Node):
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.25          # proportional gain on normalized near-band offset
         self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
-        self.base_speed = 0.3            # forward speed on a straight (m/s)
-        self.min_speed = 0.22            # forward speed in tightest corner / lookahead-only mode
+        self.cruise_speed = 0.30         # speed during "on" pulses; must clear the ESC dead zone
+        self.base_duty = 0.5             # fraction of duty_window the throttle is on, on a straight
+        self.min_duty = 0.25             # duty in tightest corner / lookahead-only mode
+        self.duty_window_s = 1.5         # length of one on/off cycle (s); longer = more time per turn
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")
@@ -61,29 +63,32 @@ class LineControlNode(Node):
             return
 
         if near is not None:
-            # Primary case: steer from near band, slow down if far band disagrees.
             offset = (near[0] - self.target_x) / self.image_center_x
             steer = self.steering_kp * offset
 
             if far is not None:
                 curvature = abs(far[0] - near[0]) / self.image_center_x
                 curvature = min(1.0, curvature)
-                speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
+                duty = self.base_duty - (self.base_duty - self.min_duty) * curvature
             else:
-                # Line has exited the far band — we're likely mid-corner, slow down.
-                speed = self.min_speed
+                duty = self.min_duty
         else:
-            # Near band lost the line but far band still sees it: line is about to
-            # re-enter view through a corner. Steer aggressively toward it at min speed.
             offset = (far[0] - self.target_x) / self.image_center_x
             steer = self.lookahead_steering_kp * offset
-            speed = self.min_speed
+            duty = self.min_duty
+
+        # Throttle pulse: ESC dead zone forces all-or-nothing on linear.x, so we
+        # gate cruise_speed by a duty cycle to get a slower effective pace while
+        # keeping every "on" pulse strong enough to actually move the rover.
+        now_s = self.get_clock().now().nanoseconds / 1e9
+        phase = now_s % self.duty_window_s
+        throttle_on = phase < self.duty_window_s * duty
 
         cmd.angular.z = max(-1.0, min(1.0, steer))
-        cmd.linear.x = speed
+        cmd.linear.x = self.cruise_speed if throttle_on else 0.0
         self.publisher_.publish(cmd)
         self.get_logger().debug(
-            f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "
+            f"on={throttle_on} duty={duty:.2f} steer={cmd.angular.z:.2f} "
             f"near={near} far={far}"
         )
 

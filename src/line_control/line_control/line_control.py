@@ -24,12 +24,12 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.25          # proportional gain on blended near/far offset
-        self.lookahead_steering_kp = 1.5 # gain when only the far band sees the line (corner entry)
+        self.steering_kp = 1.6           # proportional gain on blended near/far offset
+        self.lookahead_steering_kp = 1.9 # gain when only the far band sees the line (corner entry)
         self.near_weight = 0.35          # weight on near-band offset in steering blend
         self.far_weight = 0.65           # weight on far-band offset — heavier so turning anticipates the curve
         self.base_speed = 0.3            # forward speed on a straight (m/s)
-        self.min_speed = 0.22            # forward speed in tightest corner / lookahead-only mode
+        self.min_speed = 0.25            # forward speed in tightest corner / lookahead-only mode
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

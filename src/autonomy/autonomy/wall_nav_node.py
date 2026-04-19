@@ -30,10 +30,10 @@ class WallNavNode(Node):
         self.declare_parameter("kd", 0.3)
         self.declare_parameter("target_distance", 0.6)
         self.declare_parameter("forward_speed", 0.4)
-        # Right-wall window in degrees, using the convention 0°=front,
-        # 90°=left, 270°=right (counterclockwise positive).
-        self.declare_parameter("right_angle_min_deg", 250.0)
-        self.declare_parameter("right_angle_max_deg", 290.0)
+        # Right-wall window in degrees. 0°=front, window is centered on the
+        # right-hand side of the car as reported by this LIDAR mount.
+        self.declare_parameter("right_angle_min_deg", 70.0)
+        self.declare_parameter("right_angle_max_deg", 110.0)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)

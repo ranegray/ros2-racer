@@ -63,6 +63,8 @@ class LineControlNode(Node):
 
         if near is not None:
             near_offset = (near[0] - self.target_x) / self.image_center_x
+            steer = self.steering_kp * near_offset
+            speed = self.base_speed
 
             if far is not None:
                 far_offset = (far[0] - self.target_x) / self.image_center_x
@@ -73,13 +75,8 @@ class LineControlNode(Node):
                     steer = self.lookahead_steering_kp * far_offset
                     speed = self.min_speed
                 else:
-                    steer = self.steering_kp * near_offset
                     curvature = min(1.0, abs(far_offset - near_offset))
                     speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
-            else:
-                # Far band lost the line — follow the near band at reduced speed.
-                steer = self.steering_kp * near_offset
-                speed = self.min_speed
         else:
             # Near band lost the line but far band still sees it: corner entry.
             # Steer aggressively toward far at min speed.

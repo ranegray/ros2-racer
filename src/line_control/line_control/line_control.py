@@ -24,10 +24,9 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.6           # proportional gain on blended near/far offset
-        self.lookahead_steering_kp = 1.9 # gain when only the far band sees the line (corner entry)
-        self.near_weight = 0.35          # weight on near-band offset in steering blend
-        self.far_weight = 0.65           # weight on far-band offset — heavier so turning anticipates the curve
+        self.steering_kp = 1.6           # proportional gain on near-band offset (normal following)
+        self.lookahead_steering_kp = 2.2 # gain used when a 90° right turn is detected or near loses the line
+        self.turn_threshold = 0.35       # (far_offset - near_offset) above this = 90° right turn incoming
         self.base_speed = 0.3            # forward speed on a straight (m/s)
         self.min_speed = 0.25            # forward speed in tightest corner / lookahead-only mode
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
@@ -67,20 +66,25 @@ class LineControlNode(Node):
 
             if far is not None:
                 far_offset = (far[0] - self.target_x) / self.image_center_x
-                blended = self.near_weight * near_offset + self.far_weight * far_offset
-                steer = self.steering_kp * blended
-                curvature = abs(far[0] - near[0]) / self.image_center_x
-                curvature = min(1.0, curvature)
-                speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
+                # 90° right turns are the only sharp turns on the course, so the alarm
+                # is directional: fires only when far is far to the *right* of near.
+                # Smooth left/right weaves have small deltas and fall through.
+                if (far_offset - near_offset) > self.turn_threshold:
+                    steer = self.lookahead_steering_kp * far_offset
+                    speed = self.min_speed
+                else:
+                    steer = self.steering_kp * near_offset
+                    curvature = min(1.0, abs(far_offset - near_offset))
+                    speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
             else:
-                # Line has exited the far band — we're likely mid-corner, slow down.
+                # Far band lost the line — follow the near band at reduced speed.
                 steer = self.steering_kp * near_offset
                 speed = self.min_speed
         else:
-            # Near band lost the line but far band still sees it: line is about to
-            # re-enter view through a corner. Steer aggressively toward it at min speed.
-            offset = (far[0] - self.target_x) / self.image_center_x
-            steer = self.lookahead_steering_kp * offset
+            # Near band lost the line but far band still sees it: corner entry.
+            # Steer aggressively toward far at min speed.
+            far_offset = (far[0] - self.target_x) / self.image_center_x
+            steer = self.lookahead_steering_kp * far_offset
             speed = self.min_speed
 
         cmd.angular.z = max(-1.0, min(1.0, steer))

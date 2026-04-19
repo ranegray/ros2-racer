@@ -71,11 +71,12 @@ class LineDetectorNode(Node):
         self.image_width = 640
         self.image_height = 480
 
-        # Two horizontal ROIs: near band drives steering, far band provides
-        # lookahead for curvature-adaptive speed and corner-entry fallback.
+        # Near band covers the bottom half of the frame and drives all continuous
+        # following. Far band is a small strip above it used only to detect sharp
+        # (90°, always-rightward) turns before the near band enters them.
         # Format: (y_start, y_end, x_start, x_end)
-        self.near_band = (360, 480, 0, self.image_width)
-        self.far_band = (140, 300, 0, self.image_width)
+        self.near_band = (240, 480, 0, self.image_width)
+        self.far_band = (140, 220, 0, self.image_width)
 
         self._setup_subscribers()
         self._setup_publishers()

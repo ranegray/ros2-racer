@@ -26,10 +26,10 @@ class WallNavNode(Node):
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
-        self.declare_parameter("kp", 1.5)
+        self.declare_parameter("kp", 1.1)
         self.declare_parameter("kd", 0.3)
         self.declare_parameter("target_distance", 0.6)
-        self.declare_parameter("forward_speed", 0.2)
+        self.declare_parameter("forward_speed", 0.3)
         # Right-wall window in degrees. 0°=front, window is centered on the
         # right-hand side of the car as reported by this LIDAR mount.
         self.declare_parameter("right_angle_min_deg", 70.0)
@@ -84,7 +84,9 @@ class WallNavNode(Node):
         kd = self.get_parameter("kd").value
         forward_speed = self.get_parameter("forward_speed").value
 
-        # Positive error => too close to the wall => steer left (+angular.z).
+        # Positive error => too close to the right wall => steer away.
+        # This rover's angular.z is inverted relative to REP-103, so the
+        # PD output is negated to make steering point away from the wall.
         error = target - right_dist
 
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -96,7 +98,7 @@ class WallNavNode(Node):
         self._prev_error = error
         self._prev_time = now
 
-        steering = kp * error + kd * d_error
+        steering = -(kp * error + kd * d_error)
 
         drive_cmd = Twist()
         drive_cmd.linear.x = float(forward_speed)

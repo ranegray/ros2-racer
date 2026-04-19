@@ -71,12 +71,17 @@ class LineDetectorNode(Node):
         self.image_width = 640
         self.image_height = 480
 
-        # Near band covers the bottom half of the frame and drives all continuous
-        # following. Far band is a small strip above it used only to detect sharp
-        # (90°, always-rightward) turns before the near band enters them.
+        # Single detection band. Tall enough to see across large (~1m) gaps in
+        # the tape so the centroid finds the next segment rather than going blind.
         # Format: (y_start, y_end, x_start, x_end)
-        self.near_band = (240, 480, 0, self.image_width)
-        self.far_band = (140, 220, 0, self.image_width)
+        self.band = (140, 480, 0, self.image_width)
+
+        # 90° right-turn detection: we declare a right turn when there is a
+        # sizable chunk of tape pixels to the right of turn_right_threshold_x
+        # (these come from the horizontal stroke of an L). Robust to gaps
+        # because it only requires the stroke, not a stem-plus-stroke pair.
+        self.turn_right_threshold_x = 480  # pixels with x > this are "far-right"
+        self.turn_right_pixel_min = 80     # min far-right pixel count to call it a turn
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -99,41 +104,62 @@ class LineDetectorNode(Node):
             msg.height, msg.width, 3
         )
 
-        near_mask, near_centroid = self._detect_in_band(image, self.near_band)
-        far_mask, far_centroid = self._detect_in_band(image, self.far_band)
+        mask, follow_centroid, turn_target = self._detect(image)
 
-        self._publish_point(self.near_point_pub, near_centroid, msg.header)
-        self._publish_point(self.far_point_pub, far_centroid, msg.header)
+        self._publish_point(self.near_point_pub, follow_centroid, msg.header)
+        self._publish_point(self.far_point_pub, turn_target, msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:
-            self._publish_debug_image(
-                image, near_mask, far_mask, near_centroid, far_centroid, msg.header
-            )
+            self._publish_debug_image(image, mask, follow_centroid, turn_target, msg.header)
 
-    def _detect_in_band(self, image, band):
-        y0, y1, x0, x1 = band
+    def _detect(self, image):
+        """Run HSV detection on the band and return (mask, follow_centroid, turn_target).
+
+        follow_centroid: mean of all detected pixels. Drives normal following;
+            gracefully spans tape gaps because it's just the mean of whatever
+            is currently visible.
+        turn_target: centroid of the far-right pixels (horizontal stroke of a
+            90° right turn), or None if no strong right-turn signal is present.
+            When non-None, control overrides following and steers toward it.
+        """
+        y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1, :]
         hsv = bgr_to_hsv(cropped)
         mask = np.all((hsv >= self.color_lower) & (hsv <= self.color_upper), axis=-1)
 
-        centroid = None
         ys, xs = np.where(mask)
-        if len(xs) > 0:
-            centroid = (int(np.mean(xs)) + x0, int(np.mean(ys)) + y0)
-        return mask, centroid
+        if len(xs) == 0:
+            return mask, None, None
 
-    def _publish_debug_image(self, image, near_mask, far_mask, near_c, far_c, header):
+        xs_abs = xs + x0
+        ys_abs = ys + y0
+        follow_centroid = (int(np.mean(xs_abs)), int(np.mean(ys_abs)))
+
+        right_mask = xs_abs > self.turn_right_threshold_x
+        turn_target = None
+        if int(right_mask.sum()) >= self.turn_right_pixel_min:
+            turn_target = (int(np.mean(xs_abs[right_mask])), int(np.mean(ys_abs[right_mask])))
+
+        return mask, follow_centroid, turn_target
+
+    def _publish_debug_image(self, image, mask, follow_c, turn_c, header):
         debug = image.copy()
 
-        # Near band = yellow, far band = cyan; red dot = near centroid, magenta = far.
-        self._overlay_band(debug, self.near_band, near_mask, box_color=(255, 255, 0))
-        self._overlay_band(debug, self.far_band, far_mask, box_color=(255, 255, 0))
+        # Yellow band outline, green mask overlay. Red dot = follow centroid.
+        # Magenta dot + vertical magenta line at turn_right_threshold_x when a
+        # right turn is detected.
+        self._overlay_band(debug, self.band, mask, box_color=(255, 255, 0))
 
-        if near_c is not None:
-            draw_filled_circle(debug, near_c[0], near_c[1], 10, (0, 0, 255))
-        if far_c is not None:
-            draw_filled_circle(debug, far_c[0], far_c[1], 8, (255, 0, 255))
+        y0, y1, _x0, _x1 = self.band
+        if turn_c is not None:
+            tx = self.turn_right_threshold_x
+            draw_rectangle(debug, tx, y0, tx + 2, y1, (255, 0, 255), thickness=2)
+
+        if follow_c is not None:
+            draw_filled_circle(debug, follow_c[0], follow_c[1], 10, (0, 0, 255))
+        if turn_c is not None:
+            draw_filled_circle(debug, turn_c[0], turn_c[1], 10, (255, 0, 255))
 
         debug_msg = Image()
         debug_msg.header = header
@@ -144,8 +170,7 @@ class LineDetectorNode(Node):
         self.debug_img_pub.publish(debug_msg)
         self.get_logger().info(
             f"Debug image published (frame {self.frame_count}, "
-            f"near_px={int(near_mask.sum())}, far_px={int(far_mask.sum())}, "
-            f"near={near_c}, far={far_c})"
+            f"px={int(mask.sum())}, follow={follow_c}, turn={turn_c})"
         )
 
     def _overlay_band(self, debug, band, mask, box_color):

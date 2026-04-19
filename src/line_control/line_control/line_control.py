@@ -24,11 +24,15 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0            # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.6           # proportional gain on near-band offset (normal following)
-        self.lookahead_steering_kp = 2.2 # gain used when a 90° right turn is detected or near loses the line
-        self.turn_threshold = 0.35       # (far_offset - near_offset) above this = 90° right turn incoming
-        self.base_speed = 0.3            # forward speed on a straight (m/s)
-        self.min_speed = 0.25            # forward speed in tightest corner / lookahead-only mode
+        # The detector publishes from a single band:
+        #   "near" = follow centroid (mean of all visible tape; follows across gaps)
+        #   "far"  = turn target, only present when a 90° right turn is detected
+        #           (chunk of tape far to the right). When present, it overrides
+        #           the follow centroid.
+        self.steering_kp = 1.6           # proportional gain on follow-centroid offset
+        self.lookahead_steering_kp = 2.2 # proportional gain on turn-target offset (turn override)
+        self.base_speed = 0.3            # forward speed when following (m/s)
+        self.min_speed = 0.25            # forward speed when turning (m/s)
         self.goal_timeout = 1.0          # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")
@@ -57,32 +61,19 @@ class LineControlNode(Node):
         near = self._extract(self.latest_near)
         far = self._extract(self.latest_far)
 
-        if near is None and far is None:
-            self.publisher_.publish(cmd)
-            return
-
-        if near is not None:
-            near_offset = (near[0] - self.target_x) / self.image_center_x
-            steer = self.steering_kp * near_offset
-            speed = self.base_speed
-
-            if far is not None:
-                far_offset = (far[0] - self.target_x) / self.image_center_x
-                # 90° right turns are the only sharp turns on the course, so the alarm
-                # is directional: fires only when far is far to the *right* of near.
-                # Smooth left/right weaves have small deltas and fall through.
-                if (far_offset - near_offset) > self.turn_threshold:
-                    steer = self.lookahead_steering_kp * far_offset
-                    speed = self.min_speed
-                else:
-                    curvature = min(1.0, abs(far_offset - near_offset))
-                    speed = self.base_speed - (self.base_speed - self.min_speed) * curvature
-        else:
-            # Near band lost the line but far band still sees it: corner entry.
-            # Steer aggressively toward far at min speed.
+        if far is not None:
+            # Right-turn override: detector says there's a chunk of tape way
+            # out to the right. Commit to the turn — steer toward it hard.
             far_offset = (far[0] - self.target_x) / self.image_center_x
             steer = self.lookahead_steering_kp * far_offset
             speed = self.min_speed
+        elif near is not None:
+            near_offset = (near[0] - self.target_x) / self.image_center_x
+            steer = self.steering_kp * near_offset
+            speed = self.base_speed
+        else:
+            self.publisher_.publish(cmd)
+            return
 
         cmd.angular.z = max(-1.0, min(1.0, steer))
         cmd.linear.x = speed

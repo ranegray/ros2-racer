@@ -94,10 +94,7 @@ class LineControlNode(Node):
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer + self.steering_trim))
-        if turn is not None:
-            cmd.linear.x = speed  # committed turn — no speed reduction
-        else:
-            cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
+        cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
         self.publisher_.publish(cmd)
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "

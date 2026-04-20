@@ -27,8 +27,8 @@ class LineControlNode(Node):
         self.turn_steering_kp = (
             2.65  # proportional gain on turn-point offset (override)
         )
-        self.base_speed = 0.23  # forward speed when following (m/s)
-        self.turn_speed = 0.23  # forward speed when turning (m/s)
+        self.base_speed = 0.21  # forward speed when following (m/s)
+        self.turn_speed = 0.21  # forward speed when turning (m/s)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         # Line-loss reverse recovery

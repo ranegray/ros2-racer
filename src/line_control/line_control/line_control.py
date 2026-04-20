@@ -30,8 +30,10 @@ class LineControlNode(Node):
         )
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.55  # forward speed when turning (m/s)
-        self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
-        self.min_speed = 0.45   # floor — motors must always get at least this much throttle
+        self.speed_scale = 0.5       # how much steering reduces speed during following
+        self.min_speed = 0.45        # speed floor during following
+        self.turn_speed_scale = 0.85 # more aggressive slowdown during committed turns
+        self.turn_min_speed = 0.35   # lower floor during committed turns
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
@@ -94,7 +96,10 @@ class LineControlNode(Node):
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer + self.steering_trim))
-        cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
+        if turn is not None:
+            cmd.linear.x = max(self.turn_min_speed, speed * (1.0 - abs(cmd.angular.z) * self.turn_speed_scale))
+        else:
+            cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
         self.publisher_.publish(cmd)
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "

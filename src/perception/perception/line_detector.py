@@ -90,7 +90,7 @@ class LineDetectorNode(Node):
         # horizontal in the image. We detect this via second-order moments and
         # steer toward the far (top-of-band) centroid to anticipate the turn.
         self.min_pixels_for_orientation = 100  # min tape pixels to compute orientation
-        self.horizontal_threshold = 0.3        # |cos(angle)| above this = curving
+        self.horizontal_threshold = 0.4        # |cos(angle)| above this = curving
 
         self._setup_subscribers()
         self._setup_publishers()

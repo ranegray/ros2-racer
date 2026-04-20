@@ -24,7 +24,7 @@ class LineControlNode(Node):
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 3.0   # proportional gain on follow-point offset
-        self.steering_kd = 2.0   # derivative gain on follow-point offset
+        self.steering_kd = 5.0   # derivative gain on follow-point offset
         self.turn_steering_kp = (
             3.5   # proportional gain on turn-point offset (override)
         )

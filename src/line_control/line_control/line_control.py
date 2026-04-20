@@ -37,6 +37,9 @@ class LineControlNode(Node):
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
+        self.committed_turn_duration = 0.6  # seconds to stay in turn mode after turn target disappears
+        self._committed_turn_remaining = 0.0
+
         self.prev_offset = 0.0       # previous normalized offset for D term
         self.dt = 0.1                # control loop period (s)
         self.last_known_offset = 0.0 # sign of last seen offset; drives recovery steer when line is lost
@@ -70,14 +73,23 @@ class LineControlNode(Node):
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
 
+        in_turn = False
         if turn is not None:
-            # Right-turn override: detector saw a chunk of tape far to the right.
-            # Commit to the turn and steer toward it.
+            # Active turn target — reset the committed turn timer.
+            in_turn = True
+            self._committed_turn_remaining = self.committed_turn_duration
             offset = (turn[0] - self.target_x) / self.image_center_x
             steer = self.turn_steering_kp * offset
             speed = self.turn_speed
             self.prev_offset = offset  # keep prev_offset current to avoid D spike on return to follow
             self.last_known_offset = offset
+        elif self._committed_turn_remaining > 0:
+            # Turn target just disappeared but we're still mid-arc — keep turning
+            # at the same gain using the last known offset so the robot finishes the corner.
+            in_turn = True
+            self._committed_turn_remaining -= self.dt
+            steer = self.turn_steering_kp * self.last_known_offset
+            speed = self.turn_speed
         elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
             d_offset = (offset - self.prev_offset) / self.dt
@@ -92,12 +104,12 @@ class LineControlNode(Node):
                 cmd.angular.z = 1.0    # full right
             else:
                 cmd.angular.z = -1.0   # full left
-            cmd.linear.x = self.turn_min_speed  # slow way down to keep the arc tight
+            cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer + self.steering_trim))
-        if turn is not None:
+        if in_turn:
             cmd.linear.x = max(self.turn_min_speed, speed * (1.0 - abs(cmd.angular.z) * self.turn_speed_scale))
         else:
             cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))

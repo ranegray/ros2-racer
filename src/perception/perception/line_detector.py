@@ -73,8 +73,11 @@ class LineDetectorNode(Node):
 
         # Single detection band. Tall enough to see across large (~1m) gaps in
         # the tape so the centroid finds the next segment rather than going blind.
+        # Biased toward the upper (farther) portion so the centroid gives a
+        # lookahead signal — anticipates curves instead of reacting once the
+        # line has already swept across the near view.
         # Format: (y_start, y_end, x_start, x_end)
-        self.band = (140, 480, 0, self.image_width)
+        self.band = (140, 380, 0, self.image_width)
 
         # 90° right-turn detection: we declare a right turn when there is a
         # sizable chunk of tape pixels to the right of turn_right_threshold_x

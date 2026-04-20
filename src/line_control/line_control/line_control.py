@@ -23,7 +23,7 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.6   # proportional gain on follow-point offset
+        self.steering_kp = 3.0   # proportional gain on follow-point offset
         self.steering_kd = 2.0   # derivative gain on follow-point offset
         self.turn_steering_kp = (
             3.5   # proportional gain on turn-point offset (override)
@@ -86,9 +86,9 @@ class LineControlNode(Node):
         else:
             # Line lost — steer full toward the side we last saw it on
             if self.last_known_offset > 0:
-                cmd.angular.z = -1.0   # full left
-            elif self.last_known_offset < 0:
                 cmd.angular.z = 1.0    # full right
+            elif self.last_known_offset < 0:
+                cmd.angular.z = -1.0   # full left
             cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return

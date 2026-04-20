@@ -65,8 +65,8 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        self.color_lower = np.array([95, 110, 60])    # H_min, S_min, V_min
-        self.color_upper = np.array([130, 255, 200])  # H_max, S_max, V_max
+        self.color_lower = np.array([100, 110, 60])   # H_min, S_min, V_min
+        self.color_upper = np.array([120, 255, 200])  # H_max, S_max, V_max
 
         self.image_width = 640
         self.image_height = 480
@@ -90,7 +90,7 @@ class LineDetectorNode(Node):
         # horizontal in the image. We detect this via second-order moments and
         # steer toward the far (top-of-band) centroid to anticipate the turn.
         self.min_pixels_for_orientation = 100  # min tape pixels to compute orientation
-        self.horizontal_threshold = 0.65       # |cos(angle)| above this = curving
+        self.horizontal_threshold = 0.3        # |cos(angle)| above this = curving
 
         self._setup_subscribers()
         self._setup_publishers()

@@ -30,6 +30,7 @@ class LineControlNode(Node):
         )
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.55  # forward speed when turning (m/s)
+        self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         # Line-loss reverse recovery
@@ -129,7 +130,7 @@ class LineControlNode(Node):
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer))
-        cmd.linear.x = speed
+        cmd.linear.x = speed * (1.0 - abs(cmd.angular.z) * self.speed_scale)
         self.publisher_.publish(cmd)
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "

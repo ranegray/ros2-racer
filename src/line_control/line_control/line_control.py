@@ -86,9 +86,9 @@ class LineControlNode(Node):
         else:
             # Line lost — steer full toward the side we last saw it on
             if self.last_known_offset > 0:
-                cmd.angular.z = 1.0    # full right
+                cmd.angular.z = -1.0   # full right (angular.z sign inverted on this rover)
             elif self.last_known_offset < 0:
-                cmd.angular.z = -1.0   # full left
+                cmd.angular.z = 1.0    # full left
             cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return

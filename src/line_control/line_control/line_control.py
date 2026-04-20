@@ -35,19 +35,9 @@ class LineControlNode(Node):
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
-        # Line-loss reverse recovery
-        self.reverse_speed = 0.37  # m/s (published as negative linear.x)
-        self.reverse_debounce = 0.15  # s line must be missing before reversing
-        self.reverse_recent_window = 1.0  # must have seen line within this window
-        self.reverse_duration_cap = 1.0  # max time to spend reversing
-        self.reverse_cooldown = 0.5  # min normal-driving time between reverses
-        self.reverse_bias_steer = 0.4  # angular.z during reverse (positive = pan camera right); course is right-biased
-        self.last_line_seen_sec = None
-        self.reverse_start_sec = None
-        self.cooldown_end_sec = None
-
-        self.prev_offset = 0.0  # previous normalized offset for D term
-        self.dt = 0.1           # control loop period (s)
+        self.prev_offset = 0.0       # previous normalized offset for D term
+        self.dt = 0.1                # control loop period (s)
+        self.last_known_offset = 0.0 # sign of last seen offset; drives recovery steer when line is lost
 
         self.get_logger().info("Line Control Node has started!")
 
@@ -74,16 +64,9 @@ class LineControlNode(Node):
 
     def control_loop(self):
         cmd = Twist()
-        now = self._now_sec()
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
-
-        if turn is not None or follow is not None:
-            self.last_line_seen_sec = now
-            if self.reverse_start_sec is not None:
-                self.reverse_start_sec = None
-                self.cooldown_end_sec = now + self.reverse_cooldown
 
         if turn is not None:
             # Right-turn override: detector saw a chunk of tape far to the right.
@@ -92,42 +75,21 @@ class LineControlNode(Node):
             steer = self.turn_steering_kp * offset
             speed = self.turn_speed
             self.prev_offset = offset  # keep prev_offset current to avoid D spike on return to follow
+            self.last_known_offset = offset
         elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
             d_offset = (offset - self.prev_offset) / self.dt
             self.prev_offset = offset
+            self.last_known_offset = offset
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            if self.reverse_start_sec is not None:
-                if now - self.reverse_start_sec >= self.reverse_duration_cap:
-                    self.reverse_start_sec = None
-                    self.cooldown_end_sec = now + self.reverse_cooldown
-                    self.publisher_.publish(cmd)
-                    return
-                cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = self.reverse_bias_steer
-                self.publisher_.publish(cmd)
-                return
-
-            in_cooldown = (
-                self.cooldown_end_sec is not None and now < self.cooldown_end_sec
-            )
-            seen_recently = (
-                self.last_line_seen_sec is not None
-                and (now - self.last_line_seen_sec) <= self.reverse_recent_window
-            )
-            debounce_passed = (
-                self.last_line_seen_sec is not None
-                and (now - self.last_line_seen_sec) >= self.reverse_debounce
-            )
-            if (not in_cooldown) and seen_recently and debounce_passed:
-                self.reverse_start_sec = now
-                cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = self.reverse_bias_steer
-                self.publisher_.publish(cmd)
-                return
-
+            # Line lost — steer full toward the side we last saw it on
+            if self.last_known_offset > 0:
+                cmd.angular.z = 1.0    # full right
+            elif self.last_known_offset < 0:
+                cmd.angular.z = -1.0   # full left
+            cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return
 

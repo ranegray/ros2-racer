@@ -28,6 +28,12 @@ class LineControlNode(Node):
         self.base_speed = 0.36  # forward speed when following (m/s)
         self.turn_speed = 0.31  # forward speed when turning (m/s)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
+        self.lost_grace = 0.5  # replay last command for this long when tape vanishes briefly
+
+        # Last known good command, replayed during short tape dropouts.
+        self.last_steer = 0.0
+        self.last_speed = 0.0
+        self.last_cmd_time = None
 
         self.get_logger().info("Line Control Node has started!")
 
@@ -55,6 +61,8 @@ class LineControlNode(Node):
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
 
+        now = self.get_clock().now()
+
         if turn is not None:
             # Right-turn override: detector saw a chunk of tape far to the right.
             # Commit to the turn and steer toward it.
@@ -66,12 +74,25 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset
             speed = self.base_speed
         else:
+            # No valid signal this cycle. Replay the last good command for up to
+            # lost_grace seconds to ride out brief dropouts (e.g. line leaving
+            # frame mid-turn). After the grace window, stop.
+            if self.last_cmd_time is not None:
+                age = (now - self.last_cmd_time).nanoseconds / 1e9
+                if age <= self.lost_grace:
+                    cmd.angular.z = self.last_steer
+                    cmd.linear.x = self.last_speed
+                    self.publisher_.publish(cmd)
+                    return
             self.publisher_.publish(cmd)
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer))
         cmd.linear.x = speed
         self.publisher_.publish(cmd)
+        self.last_steer = cmd.angular.z
+        self.last_speed = cmd.linear.x
+        self.last_cmd_time = now
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "
             f"follow={follow} turn={turn}"

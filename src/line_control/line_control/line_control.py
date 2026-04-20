@@ -23,7 +23,8 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.4  # proportional gain on follow-point offset
+        self.steering_kp = 1.4   # proportional gain on follow-point offset
+        self.steering_kd = 0.0   # derivative gain on follow-point offset
         self.turn_steering_kp = (
             2.65  # proportional gain on turn-point offset (override)
         )
@@ -41,6 +42,9 @@ class LineControlNode(Node):
         self.last_line_seen_sec = None
         self.reverse_start_sec = None
         self.cooldown_end_sec = None
+
+        self.prev_offset = 0.0  # previous normalized offset for D term
+        self.dt = 0.1           # control loop period (s)
 
         self.get_logger().info("Line Control Node has started!")
 
@@ -84,9 +88,12 @@ class LineControlNode(Node):
             offset = (turn[0] - self.target_x) / self.image_center_x
             steer = self.turn_steering_kp * offset
             speed = self.turn_speed
+            self.prev_offset = offset  # keep prev_offset current to avoid D spike on return to follow
         elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
-            steer = self.steering_kp * offset
+            d_offset = (offset - self.prev_offset) / self.dt
+            self.prev_offset = offset
+            steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
             if self.reverse_start_sec is not None:

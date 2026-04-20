@@ -26,7 +26,7 @@ class LineControlNode(Node):
         self.steering_kp = 1.4  # proportional gain on follow-point offset
         self.turn_steering_kp = 2.45  # proportional gain on turn-point offset (override)
         self.base_speed = 0.33  # forward speed when following (m/s)
-        self.turn_speed = 0.30  # forward speed when turning (m/s)
+        self.turn_speed = 0.33  # forward speed when turning (m/s)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

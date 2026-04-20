@@ -86,12 +86,13 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost — steer full toward the side we last saw it on
-            if self.last_known_offset > 0:
+            # Line lost — pivot toward the side we last saw it on until found.
+            # Default to right (>= 0) since the course turns right.
+            if self.last_known_offset >= 0:
                 cmd.angular.z = 1.0    # full right
-            elif self.last_known_offset < 0:
+            else:
                 cmd.angular.z = -1.0   # full left
-            cmd.linear.x = self.min_speed
+            cmd.linear.x = self.turn_min_speed  # slow way down to keep the arc tight
             self.publisher_.publish(cmd)
             return
 

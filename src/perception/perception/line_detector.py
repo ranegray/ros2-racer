@@ -83,14 +83,14 @@ class LineDetectorNode(Node):
         # sizable chunk of tape pixels to the right of turn_right_threshold_x
         # (these come from the horizontal stroke of an L). Robust to gaps
         # because it only requires the stroke, not a stem-plus-stroke pair.
-        self.turn_right_threshold_x = 400  # pixels with x > this are "far-right"
+        self.turn_right_threshold_x = 500  # pixels with x > this are "far-right"
         self.turn_right_pixel_min = 60     # min far-right pixel count to call it a turn
 
         # Horizontal orientation detection: when tape curves it appears more
         # horizontal in the image. We detect this via second-order moments and
         # steer toward the far (top-of-band) centroid to anticipate the turn.
         self.min_pixels_for_orientation = 100  # min tape pixels to compute orientation
-        self.horizontal_threshold = 0.4        # |cos(angle)| above this = curving
+        self.horizontal_threshold = 0.6        # |cos(angle)| above this = curving
 
         self._setup_subscribers()
         self._setup_publishers()

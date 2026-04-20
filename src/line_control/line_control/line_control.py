@@ -35,8 +35,11 @@ class LineControlNode(Node):
         self.reverse_recent_window = 1.0  # must have seen line within this window
         self.reverse_duration_cap = 1.0  # max time to spend reversing
         self.reverse_cooldown = 0.5  # min normal-driving time between reverses
+        self.reverse_turn_bias_steer = 0.4  # angular.z during reverse after a turn-mode loss (pans camera right)
         self.last_line_seen_sec = None
+        self.last_valid_mode = None  # "turn" or "follow" — mode of most recent valid frame
         self.reverse_start_sec = None
+        self.reverse_start_mode = None  # mode at the moment reverse began
         self.cooldown_end_sec = None
 
         self.get_logger().info("Line Control Node has started!")
@@ -71,8 +74,10 @@ class LineControlNode(Node):
 
         if turn is not None or follow is not None:
             self.last_line_seen_sec = now
+            self.last_valid_mode = "turn" if turn is not None else "follow"
             if self.reverse_start_sec is not None:
                 self.reverse_start_sec = None
+                self.reverse_start_mode = None
                 self.cooldown_end_sec = now + self.reverse_cooldown
 
         if turn is not None:
@@ -89,11 +94,16 @@ class LineControlNode(Node):
             if self.reverse_start_sec is not None:
                 if now - self.reverse_start_sec >= self.reverse_duration_cap:
                     self.reverse_start_sec = None
+                    self.reverse_start_mode = None
                     self.cooldown_end_sec = now + self.reverse_cooldown
                     self.publisher_.publish(cmd)
                     return
                 cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = 0.0
+                cmd.angular.z = (
+                    self.reverse_turn_bias_steer
+                    if self.reverse_start_mode == "turn"
+                    else 0.0
+                )
                 self.publisher_.publish(cmd)
                 return
 
@@ -110,8 +120,13 @@ class LineControlNode(Node):
             )
             if (not in_cooldown) and seen_recently and debounce_passed:
                 self.reverse_start_sec = now
+                self.reverse_start_mode = self.last_valid_mode
                 cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = 0.0
+                cmd.angular.z = (
+                    self.reverse_turn_bias_steer
+                    if self.reverse_start_mode == "turn"
+                    else 0.0
+                )
                 self.publisher_.publish(cmd)
                 return
 

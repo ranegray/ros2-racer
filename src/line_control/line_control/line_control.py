@@ -29,6 +29,16 @@ class LineControlNode(Node):
         self.turn_speed = 0.37  # forward speed when turning (m/s)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
+        # Line-loss reverse recovery
+        self.reverse_speed = 0.20  # m/s (published as negative linear.x)
+        self.reverse_debounce = 0.15  # s line must be missing before reversing
+        self.reverse_recent_window = 1.0  # must have seen line within this window
+        self.reverse_duration_cap = 1.0  # max time to spend reversing
+        self.reverse_cooldown = 0.5  # min normal-driving time between reverses
+        self.last_line_seen_sec = None
+        self.reverse_start_sec = None
+        self.cooldown_end_sec = None
+
         self.get_logger().info("Line Control Node has started!")
 
     def _follow_callback(self, msg):
@@ -49,11 +59,21 @@ class LineControlNode(Node):
             return None
         return (msg.point.x, msg.point.y)
 
+    def _now_sec(self):
+        return self.get_clock().now().nanoseconds / 1e9
+
     def control_loop(self):
         cmd = Twist()
+        now = self._now_sec()
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
+
+        if turn is not None or follow is not None:
+            self.last_line_seen_sec = now
+            if self.reverse_start_sec is not None:
+                self.reverse_start_sec = None
+                self.cooldown_end_sec = now + self.reverse_cooldown
 
         if turn is not None:
             # Right-turn override: detector saw a chunk of tape far to the right.
@@ -66,6 +86,35 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset
             speed = self.base_speed
         else:
+            if self.reverse_start_sec is not None:
+                if now - self.reverse_start_sec >= self.reverse_duration_cap:
+                    self.reverse_start_sec = None
+                    self.cooldown_end_sec = now + self.reverse_cooldown
+                    self.publisher_.publish(cmd)
+                    return
+                cmd.linear.x = -self.reverse_speed
+                cmd.angular.z = 0.0
+                self.publisher_.publish(cmd)
+                return
+
+            in_cooldown = (
+                self.cooldown_end_sec is not None and now < self.cooldown_end_sec
+            )
+            seen_recently = (
+                self.last_line_seen_sec is not None
+                and (now - self.last_line_seen_sec) <= self.reverse_recent_window
+            )
+            debounce_passed = (
+                self.last_line_seen_sec is not None
+                and (now - self.last_line_seen_sec) >= self.reverse_debounce
+            )
+            if (not in_cooldown) and seen_recently and debounce_passed:
+                self.reverse_start_sec = now
+                cmd.linear.x = -self.reverse_speed
+                cmd.angular.z = 0.0
+                self.publisher_.publish(cmd)
+                return
+
             self.publisher_.publish(cmd)
             return
 

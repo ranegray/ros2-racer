@@ -32,7 +32,7 @@ class LineControlNode(Node):
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         # Line-loss reverse recovery
-        self.reverse_speed = 0.20  # m/s (published as negative linear.x)
+        self.reverse_speed = 0.30  # m/s (published as negative linear.x)
         self.reverse_debounce = 0.15  # s line must be missing before reversing
         self.reverse_recent_window = 1.0  # must have seen line within this window
         self.reverse_duration_cap = 1.0  # max time to spend reversing

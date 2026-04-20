@@ -24,9 +24,9 @@ class LineControlNode(Node):
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.25  # proportional gain on follow-point offset
-        self.turn_steering_kp = 1.8  # proportional gain on turn-point offset (override)
-        self.base_speed = 0.30  # forward speed when following (m/s)
-        self.turn_speed = 0.26  # forward speed when turning (m/s)
+        self.turn_steering_kp = 2.2  # proportional gain on turn-point offset (override)
+        self.base_speed = 0.36  # forward speed when following (m/s)
+        self.turn_speed = 0.30  # forward speed when turning (m/s)
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         self.get_logger().info("Line Control Node has started!")

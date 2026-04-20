@@ -26,7 +26,7 @@ class LineControlNode(Node):
         self.steering_kp = 1.6   # proportional gain on follow-point offset
         self.steering_kd = 2.0   # derivative gain on follow-point offset
         self.turn_steering_kp = (
-            2.65  # proportional gain on turn-point offset (override)
+            3.5   # proportional gain on turn-point offset (override)
         )
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.55  # forward speed when turning (m/s)
@@ -130,7 +130,10 @@ class LineControlNode(Node):
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer))
-        cmd.linear.x = speed * (1.0 - abs(cmd.angular.z) * self.speed_scale)
+        if turn is not None:
+            cmd.linear.x = speed  # committed turn — no speed reduction
+        else:
+            cmd.linear.x = speed * (1.0 - abs(cmd.angular.z) * self.speed_scale)
         self.publisher_.publish(cmd)
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "

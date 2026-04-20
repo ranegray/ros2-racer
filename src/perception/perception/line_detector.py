@@ -77,20 +77,20 @@ class LineDetectorNode(Node):
         # lookahead signal — anticipates curves instead of reacting once the
         # line has already swept across the near view.
         # Format: (y_start, y_end, x_start, x_end)
-        self.band = (140, 380, 0, self.image_width)
+        self.band = (80, 280, 0, self.image_width)
 
         # 90° right-turn detection: we declare a right turn when there is a
         # sizable chunk of tape pixels to the right of turn_right_threshold_x
         # (these come from the horizontal stroke of an L). Robust to gaps
         # because it only requires the stroke, not a stem-plus-stroke pair.
-        self.turn_right_threshold_x = 480  # pixels with x > this are "far-right"
-        self.turn_right_pixel_min = 80     # min far-right pixel count to call it a turn
+        self.turn_right_threshold_x = 450  # pixels with x > this are "far-right"
+        self.turn_right_pixel_min = 60     # min far-right pixel count to call it a turn
 
         # Horizontal orientation detection: when tape curves it appears more
         # horizontal in the image. We detect this via second-order moments and
         # steer toward the far (top-of-band) centroid to anticipate the turn.
         self.min_pixels_for_orientation = 100  # min tape pixels to compute orientation
-        self.horizontal_threshold = 0.5        # |cos(angle)| above this = curving
+        self.horizontal_threshold = 0.3        # |cos(angle)| above this = curving
 
         self._setup_subscribers()
         self._setup_publishers()

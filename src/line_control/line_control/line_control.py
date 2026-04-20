@@ -30,7 +30,7 @@ class LineControlNode(Node):
         )
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.55  # forward speed when turning (m/s)
-        self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.speed_scale = 0.8  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
         self.min_speed = 0.45   # floor — motors must always get at least this much throttle
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)

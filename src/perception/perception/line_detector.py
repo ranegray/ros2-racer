@@ -144,7 +144,13 @@ class LineDetectorNode(Node):
 
         xs_abs = xs + x0
         ys_abs = ys + y0
-        follow_centroid = (int(np.mean(xs_abs)), int(np.mean(ys_abs)))
+
+        # Weight pixels by distance ahead — higher in the image (lower y) = further
+        # ahead = more weight. This biases the centroid toward the upcoming curve
+        # without discarding near pixels entirely.
+        weights = (y1 - ys_abs).astype(float)
+        weights /= weights.sum()
+        follow_centroid = (int(np.average(xs_abs, weights=weights)), int(np.average(ys_abs, weights=weights)))
 
         # --- Orientation-based curve detection ---
         # Compute second-order moments to find the angle of the tape blob's

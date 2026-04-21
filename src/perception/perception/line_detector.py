@@ -51,6 +51,16 @@ class LineDetectorNode(Node):
         self.turn_right_threshold_x = 500
         self.turn_right_pixel_min = 60
 
+        # Orientation-based early turn detection.
+        # The major axis of the tape blob is computed via second-order moments.
+        # A vertical (straight) tape has |cos(angle)| ≈ 0.
+        # A horizontal (90° turn ahead) tape has |cos(angle)| → 1.
+        # When the blob tips past the threshold, steer toward the far (top)
+        # portion of the blob so the turn starts well before the L-marker
+        # reaches the right edge.
+        self.min_pixels_for_orientation = 100
+        self.horizontal_threshold = 0.6  # |cos(angle)| above this = turning
+
         self._setup_subscribers()
         self._setup_publishers()
 
@@ -128,9 +138,34 @@ class LineDetectorNode(Node):
         blob_ys_abs = blob_ys + y0
         follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
 
-        # --- 90° right-turn override ---
-        right_mask = all_xs_abs > self.turn_right_threshold_x
+        # --- Orientation-based early turn detection ---
+        # Compute the angle of the blob's major axis via second-order moments.
+        # Straight tape ≈ vertical → |cos(angle)| ≈ 0.
+        # 90° turn ahead ≈ horizontal → |cos(angle)| → 1.
+        # When curving, steer toward the far (top) half of the blob so the
+        # robot starts turning before the L-marker reaches the right edge.
         turn_target = None
+        if len(blob_xs) >= self.min_pixels_for_orientation:
+            cx_f = float(np.mean(blob_xs_abs))
+            cy_f = float(np.mean(blob_ys_abs))
+            dx = blob_xs_abs.astype(float) - cx_f
+            dy = blob_ys_abs.astype(float) - cy_f
+            mu11 = float(np.mean(dx * dy))
+            mu20 = float(np.mean(dx * dx))
+            mu02 = float(np.mean(dy * dy))
+            angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
+            if abs(np.cos(angle)) > self.horizontal_threshold:
+                mid_y = (y0 + y1) // 2
+                far_mask = blob_ys_abs < mid_y
+                if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
+                    turn_target = (
+                        int(np.mean(blob_xs_abs[far_mask])),
+                        int(np.mean(blob_ys_abs[far_mask])),
+                    )
+
+        # --- 90° right-turn override ---
+        # Far-right pixel cluster overrides the orientation-based target.
+        right_mask = all_xs_abs > self.turn_right_threshold_x
         if int(right_mask.sum()) >= self.turn_right_pixel_min:
             turn_target = (
                 int(np.mean(all_xs_abs[right_mask])),

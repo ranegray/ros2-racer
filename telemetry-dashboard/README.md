@@ -15,6 +15,7 @@ ros2 launch telemetry telemetry_launch.py # subscribes to telemetry and publishe
 
 ```bash
 cd telemetry-dashboard
+docker compose build --no-cache
 docker compose up
 # go to http://localhost:5173
 ```

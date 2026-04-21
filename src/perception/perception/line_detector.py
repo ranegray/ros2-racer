@@ -61,11 +61,6 @@ class LineDetectorNode(Node):
         self.min_pixels_for_orientation = 100
         self.horizontal_threshold = 0.6  # |cos(angle)| above this = turning
 
-        # Bounding-box shape filter — measured from actual tape in the band.
-        # Blob must fit within these dimensions to be treated as tape.
-        self.max_blob_width = 55    # px — tape is at most 55px wide in the band
-        self.min_blob_height = 195  # px — tape spans at least this much vertically
-        self.max_blob_height = 250  # px — and no more than this
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -141,38 +136,28 @@ class LineDetectorNode(Node):
         blob_xs_abs = blob_xs + x0
         blob_ys_abs = blob_ys + y0
 
-        # --- Bounding-box shape filter ---
-        # Reject blobs that don't match tape dimensions.
-        # Right-turn check below runs on all pixels regardless.
-        bb_width = int(blob_xs_abs.max() - blob_xs_abs.min() + 1)
-        bb_height = int(blob_ys_abs.max() - blob_ys_abs.min() + 1)
+        cx_f = float(np.mean(blob_xs_abs))
+        cy_f = float(np.mean(blob_ys_abs))
+        follow_centroid = (int(cx_f), int(cy_f))
 
-        follow_centroid = None
         turn_target = None
 
-        if (bb_width <= self.max_blob_width
-                and self.min_blob_height <= bb_height <= self.max_blob_height):
-
-            cx_f = float(np.mean(blob_xs_abs))
-            cy_f = float(np.mean(blob_ys_abs))
-            follow_centroid = (int(cx_f), int(cy_f))
-
-            # --- Orientation-based early turn detection ---
-            if len(blob_xs) >= self.min_pixels_for_orientation:
-                dx = blob_xs_abs.astype(float) - cx_f
-                dy = blob_ys_abs.astype(float) - cy_f
-                mu11 = float(np.mean(dx * dy))
-                mu20 = float(np.mean(dx * dx))
-                mu02 = float(np.mean(dy * dy))
-                angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
-                if abs(np.cos(angle)) > self.horizontal_threshold:
-                    mid_y = (y0 + y1) // 2
-                    far_mask = blob_ys_abs < mid_y
-                    if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
-                        turn_target = (
-                            int(np.mean(blob_xs_abs[far_mask])),
-                            int(np.mean(blob_ys_abs[far_mask])),
-                        )
+        # --- Orientation-based early turn detection ---
+        if len(blob_xs) >= self.min_pixels_for_orientation:
+            dx = blob_xs_abs.astype(float) - cx_f
+            dy = blob_ys_abs.astype(float) - cy_f
+            mu11 = float(np.mean(dx * dy))
+            mu20 = float(np.mean(dx * dx))
+            mu02 = float(np.mean(dy * dy))
+            angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
+            if abs(np.cos(angle)) > self.horizontal_threshold:
+                mid_y = (y0 + y1) // 2
+                far_mask = blob_ys_abs < mid_y
+                if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
+                    turn_target = (
+                        int(np.mean(blob_xs_abs[far_mask])),
+                        int(np.mean(blob_ys_abs[far_mask])),
+                    )
 
         # --- 90° right-turn override ---
         # Far-right pixel cluster overrides the orientation-based target.

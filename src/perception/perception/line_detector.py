@@ -1,34 +1,9 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
-from scipy.ndimage import label, binary_erosion
+from scipy import ndimage
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
-
-
-def bgr_to_hsv(bgr):
-    """OpenCV-compatible HSV: H in 0–180, S and V in 0–255."""
-    f = bgr.astype(np.float32) / 255.0
-    b, g, r = f[..., 0], f[..., 1], f[..., 2]
-    cmax = f.max(axis=-1)
-    cmin = f.min(axis=-1)
-    delta = cmax - cmin
-
-    v = (cmax * 255).astype(np.uint8)
-
-    s = np.where(cmax > 0, delta / cmax * 255, 0.0).astype(np.uint8)
-
-    h = np.zeros_like(delta)
-    valid = delta > 0
-    rmax = valid & (cmax == r)
-    gmax = valid & (cmax == g) & ~rmax
-    bmax = valid & (cmax == b) & ~rmax & ~gmax
-    h[rmax] = 60.0 * ((g[rmax] - b[rmax]) / delta[rmax] % 6)
-    h[gmax] = 60.0 * ((b[gmax] - r[gmax]) / delta[gmax] + 2)
-    h[bmax] = 60.0 * ((r[bmax] - g[bmax]) / delta[bmax] + 4)
-    h = (h / 2).astype(np.uint8)
-
-    return np.stack([h, s, v], axis=-1)
 
 
 def draw_rectangle(img, x0, y0, x1, y1, color, thickness=2):
@@ -57,19 +32,12 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        # --- HSV thresholds (OpenCV: H 0-180, S 0-255, V 0-255) ---
-        # Derived from 8 real tape samples: H:100.9-103.7, S:129-210, V:106-196
-        # High S_min is the key wall rejector — light blue walls are desaturated.
-        self.hsv_lower = np.array([100, 125, 100])
-        self.hsv_upper = np.array([104, 215, 200])
-
-        # --- RGB thresholds (image arrives as BGR) ---
-        # Same 8 samples: B:106-196, B-R:80-136, B-G:34-56
-        self.b_min = 90
-        self.br_margin = 65
-        self.bg_margin = 25
-
-        self.min_blob_pixels = 60
+        # RGB thresholds for blue tape (image arrives as BGR).
+        # Tape color ~#405F8A → B=138, G=95, R=64 in BGR.
+        self.b_min = 90       # minimum blue channel value
+        self.br_margin = 30   # blue must exceed red by at least this
+        self.bg_margin = 15   # blue must exceed green by at least this
+        self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640
         self.image_height = 480
@@ -77,15 +45,11 @@ class LineDetectorNode(Node):
         # Detection band (y_start, y_end, x_start, x_end)
         self.band = (140, 380, 0, self.image_width)
 
+        # 90° right-turn detection: far-right pixel cluster = horizontal
+        # stroke of the L-marker. Checked across ALL detected pixels (not
+        # just the largest blob) so the stroke registers even if separated.
         self.turn_right_threshold_x = 500
         self.turn_right_pixel_min = 60
-
-        # Shape filter — only accept blobs that look like a thin straight line.
-        # lam1/lam2 is the eigenvalue ratio of the blob's covariance matrix.
-        #   Round blob → ratio ≈ 1.  Long thin line → ratio >> 1.
-        # 4*sqrt(lam2) approximates the blob's width in the minor direction.
-        self.min_elongation_ratio = 5.0
-        self.max_tape_width_px = 70
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -118,31 +82,30 @@ class LineDetectorNode(Node):
             self._publish_debug_image(image, mask, follow_centroid, turn_target, msg.header)
 
     def _detect(self, image):
+        """RGB threshold → largest connected blob → centroid.
+
+        follow_centroid: centroid of the largest detected blob (the line).
+            Using the largest blob instead of all pixels rejects noise and
+            false positives automatically — the contour-based approach from
+            https://const-toporov.medium.com/line-following-robot-with-opencv-and-contour-based-approach-417b90f2c298
+        turn_target: centroid of far-right pixels when the right-turn
+            L-marker is visible. Checked on all detected pixels so the
+            horizontal stroke registers even if it forms a separate blob.
+        """
         y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1]
 
-        # 1. HSV filter — tight hue + high saturation rejects pale walls
-        hsv = bgr_to_hsv(cropped)
-        hsv_mask = np.all(
-            (hsv >= self.hsv_lower) & (hsv <= self.hsv_upper), axis=-1
-        )
-
-        # 2. RGB filter — B-channel dominance confirms it's genuinely blue
         b = cropped[..., 0].astype(np.int32)
         g = cropped[..., 1].astype(np.int32)
         r = cropped[..., 2].astype(np.int32)
-        rgb_mask = (
+
+        mask = (
             (b >= self.b_min) &
             ((b - r) >= self.br_margin) &
             ((b - g) >= self.bg_margin)
         )
 
-        # Combined: must pass both
-        mask = hsv_mask & rgb_mask
-
-        # 3. Morphological erosion — kill isolated noise pixels before contouring
-        mask = binary_erosion(mask, structure=np.ones((3, 3)))
-
+        # All detected pixels (used for right-turn check)
         all_ys, all_xs = np.where(mask)
         if len(all_xs) == 0:
             return mask, None, None
@@ -150,12 +113,12 @@ class LineDetectorNode(Node):
         all_xs_abs = all_xs + x0
         all_ys_abs = all_ys + y0
 
-        # Largest blob → follow centroid
-        labeled, num_features = label(mask)
+        # --- Largest blob → follow centroid ---
+        labeled, num_features = ndimage.label(mask)
         if num_features == 0:
             return mask, None, None
 
-        sizes = [labeled[labeled == i].size for i in range(1, num_features + 1)]
+        sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
         largest_label = int(np.argmax(sizes)) + 1
         if sizes[largest_label - 1] < self.min_blob_pixels:
             return mask, None, None
@@ -165,7 +128,7 @@ class LineDetectorNode(Node):
         blob_ys_abs = blob_ys + y0
         follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
 
-        # Right-turn override
+        # --- 90° right-turn override ---
         right_mask = all_xs_abs > self.turn_right_threshold_x
         turn_target = None
         if int(right_mask.sum()) >= self.turn_right_pixel_min:

@@ -44,6 +44,10 @@ class LineControlNode(Node):
         self.dt = 0.1                # control loop period (s)
         self.last_known_offset = 0.0 # sign of last seen offset; drives recovery steer when line is lost
 
+        self.lost_steer_delay = 1.0  # go straight for this long before steering on line loss (s)
+        self.lost_timeout = 2.0      # stop if line is lost for longer than this (s)
+        self._lost_since = None      # timestamp (s) when line was first lost
+
         self.get_logger().info("Line Control Node has started!")
 
     def _follow_callback(self, msg):
@@ -75,9 +79,10 @@ class LineControlNode(Node):
 
         in_turn = False
         if turn is not None:
-            # Active turn target — reset the committed turn timer.
+            # Active turn target — reset the committed turn timer and lost clock.
             in_turn = True
             self._committed_turn_remaining = self.committed_turn_duration
+            self._lost_since = None
             offset = (turn[0] - self.target_x) / self.image_center_x
             steer = self.turn_steering_kp * offset
             speed = self.turn_speed
@@ -88,9 +93,11 @@ class LineControlNode(Node):
             # at the same gain using the last known offset so the robot finishes the corner.
             in_turn = True
             self._committed_turn_remaining -= self.dt
+            self._lost_since = None
             steer = self.turn_steering_kp * self.last_known_offset
             speed = self.turn_speed
         elif follow is not None:
+            self._lost_since = None
             offset = (follow[0] - self.target_x) / self.image_center_x
             d_offset = (offset - self.prev_offset) / self.dt
             self.prev_offset = offset
@@ -98,12 +105,21 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost — pivot toward the side we last saw it on until found.
-            # Default to right (>= 0) since the course turns right.
-            if self.last_known_offset >= 0:
-                cmd.angular.z = 1.0    # full right
-            else:
-                cmd.angular.z = -1.0   # full left
+            # Line lost — go straight for lost_steer_delay, then steer,
+            # then stop after lost_timeout.
+            now = self._now_sec()
+            if self._lost_since is None:
+                self._lost_since = now
+            lost_for = now - self._lost_since
+            if lost_for >= self.lost_timeout:
+                self.publisher_.publish(cmd)  # zero Twist — stop
+                return
+            if lost_for >= self.lost_steer_delay:
+                recovery_steer = self.last_known_offset * 2.0
+                if abs(recovery_steer) < 0.2:
+                    recovery_steer = 0.2  # slight right bias (course turns right)
+                cmd.angular.z = max(-1.0, min(1.0, recovery_steer))
+            # else: angular.z stays 0 — go straight
             cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return

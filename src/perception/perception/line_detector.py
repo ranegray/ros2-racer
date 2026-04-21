@@ -80,6 +80,13 @@ class LineDetectorNode(Node):
         self.turn_right_threshold_x = 500
         self.turn_right_pixel_min = 60
 
+        # Shape filter — only accept blobs that look like a thin straight line.
+        # lam1/lam2 is the eigenvalue ratio of the blob's covariance matrix.
+        #   Round blob → ratio ≈ 1.  Long thin line → ratio >> 1.
+        # 4*sqrt(lam2) approximates the blob's width in the minor direction.
+        self.min_elongation_ratio = 5.0
+        self.max_tape_width_px = 70
+
         self._setup_subscribers()
         self._setup_publishers()
 

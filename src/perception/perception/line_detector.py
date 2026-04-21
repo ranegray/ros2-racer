@@ -62,8 +62,10 @@ class LineDetectorNode(Node):
         self.min_pixels_for_orientation = 100
         self.horizontal_threshold = 0.6   # |cos(angle)| above this = turning
         self.min_elongation_ratio = 2.0   # lam1/lam2 must exceed this; rejects
-                                          # blob-shaped false positives (tape is
-                                          # always elongated, not round)
+                                          # blob-shaped false positives
+        self.max_tape_width_px = 70       # 4*sqrt(lam2) upper bound in pixels;
+                                          # tape is 55px wide at closest point in
+                                          # the band → 4*sigma ≈ 63px; 70 gives buffer
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -166,7 +168,9 @@ class LineDetectorNode(Node):
             lam1 = trace / 2 + discriminant ** 0.5
             lam2 = max(trace / 2 - discriminant ** 0.5, 1e-6)
 
-            if lam1 / lam2 >= self.min_elongation_ratio:
+            minor_width = lam2 ** 0.5 * 4  # approx full width in minor direction
+            if (lam1 / lam2 >= self.min_elongation_ratio
+                    and minor_width <= self.max_tape_width_px):
                 follow_centroid = (int(cx_f), int(cy_f))
 
                 angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)

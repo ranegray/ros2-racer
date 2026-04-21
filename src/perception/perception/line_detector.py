@@ -38,7 +38,6 @@ class LineDetectorNode(Node):
         self.b_min = 90       # floor is 106; 16-unit buffer for darker shadows
         self.br_margin = 65   # floor is  80; 15-unit buffer
         self.bg_margin = 25   # floor is  34;  9-unit buffer
-        self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640
         self.image_height = 480
@@ -137,8 +136,6 @@ class LineDetectorNode(Node):
 
         sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
         largest_label = int(np.argmax(sizes)) + 1
-        if sizes[largest_label - 1] < self.min_blob_pixels:
-            return mask, None, None
 
         blob_ys, blob_xs = np.where(labeled == largest_label)
         blob_xs_abs = blob_xs + x0

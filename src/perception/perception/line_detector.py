@@ -65,8 +65,8 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        self.color_lower = np.array([100, 110, 60])   # H_min, S_min, V_min
-        self.color_upper = np.array([120, 255, 200])  # H_max, S_max, V_max
+        self.color_lower = np.array([95, 110, 60])    # H_min, S_min, V_min
+        self.color_upper = np.array([130, 255, 255])  # H_max, S_max, V_max
 
         self.image_width = 640
         self.image_height = 480
@@ -83,14 +83,8 @@ class LineDetectorNode(Node):
         # sizable chunk of tape pixels to the right of turn_right_threshold_x
         # (these come from the horizontal stroke of an L). Robust to gaps
         # because it only requires the stroke, not a stem-plus-stroke pair.
-        self.turn_right_threshold_x = 500  # pixels with x > this are "far-right"
-        self.turn_right_pixel_min = 60     # min far-right pixel count to call it a turn
-
-        # Horizontal orientation detection: when tape curves it appears more
-        # horizontal in the image. We detect this via second-order moments and
-        # steer toward the far (top-of-band) centroid to anticipate the turn.
-        self.min_pixels_for_orientation = 100  # min tape pixels to compute orientation
-        self.horizontal_threshold = 0.6        # |cos(angle)| above this = curving
+        self.turn_right_threshold_x = 480  # pixels with x > this are "far-right"
+        self.turn_right_pixel_min = 80     # min far-right pixel count to call it a turn
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -125,13 +119,12 @@ class LineDetectorNode(Node):
     def _detect(self, image):
         """Run HSV detection on the band and return (mask, follow_centroid, turn_target).
 
-        follow_centroid: mean of all detected pixels. Drives normal following.
-        turn_target: set when a curve is detected. Two sources, in priority order:
-            1. Far-right pixel cluster (horizontal stroke of a 90° right-turn L-marker).
-            2. Orientation detection — when the tape blob is significantly non-vertical
-               (|cos(angle)| > horizontal_threshold), uses the far (top-of-band) centroid
-               to anticipate the curve direction early. Works for both left and right curves.
-            When non-None, control overrides following and steers toward turn_target.
+        follow_centroid: mean of all detected pixels. Drives normal following;
+            gracefully spans tape gaps because it's just the mean of whatever
+            is currently visible.
+        turn_target: centroid of the far-right pixels (horizontal stroke of a
+            90° right turn), or None if no strong right-turn signal is present.
+            When non-None, control overrides following and steers toward it.
         """
         y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1, :]
@@ -144,43 +137,10 @@ class LineDetectorNode(Node):
 
         xs_abs = xs + x0
         ys_abs = ys + y0
+        follow_centroid = (int(np.mean(xs_abs)), int(np.mean(ys_abs)))
 
-        # Weight pixels by distance ahead — higher in the image (lower y) = further
-        # ahead = more weight. This biases the centroid toward the upcoming curve
-        # without discarding near pixels entirely.
-        weights = (y1 - ys_abs).astype(float)
-        weights /= weights.sum()
-        follow_centroid = (int(np.average(xs_abs, weights=weights)), int(np.average(ys_abs, weights=weights)))
-
-        # --- Orientation-based curve detection ---
-        # Compute second-order moments to find the angle of the tape blob's
-        # major axis. A straight tape is nearly vertical (angle ≈ ±π/2,
-        # |cos| ≈ 0). A curving/horizontal tape has |cos(angle)| > threshold.
-        # When curving, use the far (top) half of the band as the turn target
-        # so we react to the upcoming turn instead of the tape underfoot.
-        turn_target = None
-        if len(xs) >= self.min_pixels_for_orientation:
-            cx_f = float(np.mean(xs_abs))
-            cy_f = float(np.mean(ys_abs))
-            dx = xs_abs.astype(float) - cx_f
-            dy = ys_abs.astype(float) - cy_f
-            mu11 = float(np.mean(dx * dy))
-            mu20 = float(np.mean(dx * dx))
-            mu02 = float(np.mean(dy * dy))
-            angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
-            if abs(np.cos(angle)) > self.horizontal_threshold:
-                mid_y = (y0 + y1) // 2
-                far_mask = ys_abs < mid_y
-                if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
-                    turn_target = (
-                        int(np.mean(xs_abs[far_mask])),
-                        int(np.mean(ys_abs[far_mask])),
-                    )
-
-        # --- 90° right-turn override ---
-        # Far-right pixel cluster = horizontal stroke of an L-marker.
-        # Overrides the orientation-based target when present.
         right_mask = xs_abs > self.turn_right_threshold_x
+        turn_target = None
         if int(right_mask.sum()) >= self.turn_right_pixel_min:
             turn_target = (int(np.mean(xs_abs[right_mask])), int(np.mean(ys_abs[right_mask])))
 

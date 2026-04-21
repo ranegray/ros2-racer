@@ -5,10 +5,11 @@ Phase 1 master bringup launch file.
 Brings up the full hardware and infrastructure stack in a single command:
   1. LIDAR        (rplidar_ros  → /scan)
   2. RealSense    (rs_stream    → /camera/color/image_raw)
-  3. Hardware Bridge (robo_rover → /imu/*, /rover/armed, subscribes /cmd_vel)
-  4. E-Stop       (TODO: not yet implemented)
-  5. Telemetry    (telemetry    → /telemetry/racer)
-  6. rosbridge    (rosbridge_server WebSocket on port 9090)
+  3. Perception   (depth_node   → /perception/front_distance)
+  4. Hardware Bridge (robo_rover → /imu/*, /rover/armed, subscribes /cmd_vel)
+  5. E-Stop       (TODO: not yet implemented)
+  6. Telemetry    (telemetry    → /telemetry/racer)
+  7. rosbridge    (rosbridge_server WebSocket on port 9090)
 
 Usage:
     ros2 launch racer_bringup master_bringup.launch.py
@@ -54,7 +55,12 @@ def generate_launch_description():
     telemetry_rate_arg = DeclareLaunchArgument(
         'telemetry_rate',
         default_value='10.0',
-        description='Telemetry publish rate in Hz',
+        description='Scalar telemetry publish rate in Hz',
+    )
+    camera_rate_arg = DeclareLaunchArgument(
+        'camera_rate',
+        default_value='30.0',
+        description='Camera frame publish rate in Hz',
     )
     image_quality_arg = DeclareLaunchArgument(
         'image_quality',
@@ -91,7 +97,15 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Hardware Bridge ───────────────────────────────────────────────────
+    # ── 3. Perception (lidar-derived front distance) ─────────────────────────
+    depth_node = Node(
+        package='perception',
+        executable='depth_node',
+        name='depth_node',
+        output='screen',
+    )
+
+    # ── 4. Hardware Bridge ───────────────────────────────────────────────────
     rover_node = Node(
         executable='python3',
         arguments=['-m', 'robo_rover.rover_node'],
@@ -106,22 +120,23 @@ def generate_launch_description():
         }],
     )
 
-    # ── 4. E-Stop ────────────────────────────────────────────────────────────
+    # ── 5. E-Stop ────────────────────────────────────────────────────────────
     # TODO: E-Stop node — not yet implemented
 
-    # ── 5. Telemetry Aggregator ──────────────────────────────────────────────
+    # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
     telemetry_node = Node(
         package='telemetry',
         executable='telemetry_node',
         name='telemetry_node',
         parameters=[{
             'publish_rate': LaunchConfiguration('telemetry_rate'),
+            'camera_rate': LaunchConfiguration('camera_rate'),
             'image_quality': LaunchConfiguration('image_quality'),
         }],
         output='screen',
     )
 
-    # ── 6. rosbridge WebSocket server ────────────────────────────────────────
+    # ── 7. rosbridge WebSocket server ────────────────────────────────────────
     rosbridge_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -139,6 +154,7 @@ def generate_launch_description():
         rover_port_arg,
         rover_baudrate_arg,
         telemetry_rate_arg,
+        camera_rate_arg,
         image_quality_arg,
 
         # Startup banner
@@ -147,6 +163,7 @@ def generate_launch_description():
         # Nodes (sensors first, bridge, then aggregators/infrastructure)
         lidar_node,
         realsense_node,
+        depth_node,
         rover_node,
         telemetry_node,
         rosbridge_launch,

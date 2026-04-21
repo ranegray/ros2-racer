@@ -35,20 +35,25 @@ class DepthNode(Node):
         )
 
     def depth_callback(self, msg):
-        # Average over a small window around 0° (index 90) for robustness
-        center = 360
+        # Average over a small angular window around 0° (forward) for robustness.
+        # The index of 0° depends on the scan's angle_min/angle_increment, which
+        # varies by driver config — compute it instead of hard-coding.
+        n = len(msg.ranges)
+        if n == 0 or msg.angle_increment == 0.0:
+            return
+        center = int(round((0.0 - msg.angle_min) / msg.angle_increment)) % n
         half_window = 5
+        # Collect window with wrap-around so we handle scans where 0° lies near
+        # the seam between angle_max and angle_min.
         readings = [
-            r for r in msg.ranges[center - half_window : center + half_window + 1]
-            if math.isfinite(r)
+            r for i in range(-half_window, half_window + 1)
+            for r in (msg.ranges[(center + i) % n],)
+            if math.isfinite(r) and r > 0.0
         ]
         dist_to_front_obstacle = sum(readings) / len(readings) if readings else float("inf")
 
         dist_msg = Float32()
         dist_msg.data = dist_to_front_obstacle
-        self.get_logger().info(
-            f"[depth_node] Distance to front obstacle: {dist_to_front_obstacle:.2f} m"
-        )
         self.obstacle_dist_pub.publish(dist_msg)
 
 

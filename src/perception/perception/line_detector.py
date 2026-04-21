@@ -53,7 +53,7 @@ class LineDetectorNode(Node):
         self._setup_publishers()
 
         self.frame_count = 0
-        self.debug_interval = 30
+        self.debug_interval = 6
 
     def _setup_publishers(self):
         self.follow_point_pub = self.create_publisher(PointStamped, "line_follow_point", 10)

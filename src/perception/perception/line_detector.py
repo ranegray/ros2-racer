@@ -33,10 +33,10 @@ class LineDetectorNode(Node):
         super().__init__("line_detector")
 
         # RGB thresholds for blue tape (image arrives as BGR).
-        # Tape color ~#405F8A → B=138, G=95, R=64 in BGR.
-        self.b_min = 90       # minimum blue channel value
-        self.br_margin = 30   # blue must exceed red by at least this
-        self.bg_margin = 15   # blue must exceed green by at least this
+        # Tape color sampled as RGB(55, 129, 179) → BGR: B=179, G=129, R=55.
+        self.b_min = 100      # minimum blue channel value
+        self.br_margin = 45   # blue must exceed red by at least this  (tape: 124)
+        self.bg_margin = 20   # blue must exceed green by at least this (tape: 50)
         self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640

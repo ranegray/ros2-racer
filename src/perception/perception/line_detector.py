@@ -32,36 +32,22 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        # HSV thresholds — 7 samples converted to OpenCV HSV (H÷2, S/V ×2.55):
-        #   H: 101–104,  S: 130–222,  V: 105–194
-        # RGB thresholds (image arrives as BGR)
-        # 8 samples → exact observed range: B:106–196, B-R:80–136, B-G:34–56
-        self.b_min = 106
-        self.br_margin = 80
-        self.bg_margin = 34
+        # RGB thresholds for blue tape (image arrives as BGR).
+        # 8 samples taken across tape under varying light → BGR stats:
+        #   B channel: 106–196,  B-R: 80–136,  B-G: 34–56
+        self.b_min = 90       # floor is 106; 16-unit buffer for darker shadows
+        self.br_margin = 65   # floor is  80; 15-unit buffer
+        self.bg_margin = 25   # floor is  34;  9-unit buffer
+        self.min_blob_pixels = 60
 
         self.image_width = 640
         self.image_height = 480
 
         # Detection band (y_start, y_end, x_start, x_end)
-        self.band = (170, 480, 150, self.image_width - 150)
+        self.band = (140, 380, 0, self.image_width)
 
-        # 90° right-turn detection: far-right pixel cluster = horizontal
-        # stroke of the L-marker. Checked across ALL detected pixels (not
-        # just the largest blob) so the stroke registers even if separated.
         self.turn_right_threshold_x = 500
         self.turn_right_pixel_min = 60
-
-        # Orientation-based early turn detection.
-        # The major axis of the tape blob is computed via second-order moments.
-        # A vertical (straight) tape has |cos(angle)| ≈ 0.
-        # A horizontal (90° turn ahead) tape has |cos(angle)| → 1.
-        # When the blob tips past the threshold, steer toward the far (top)
-        # portion of the blob so the turn starts well before the L-marker
-        # reaches the right edge.
-        self.min_pixels_for_orientation = 100
-        self.horizontal_threshold = 0.6  # |cos(angle)| above this = turning
-
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -97,9 +83,6 @@ class LineDetectorNode(Node):
         """RGB threshold → largest connected blob → centroid.
 
         follow_centroid: centroid of the largest detected blob (the line).
-            Using the largest blob instead of all pixels rejects noise and
-            false positives automatically — the contour-based approach from
-            https://const-toporov.medium.com/line-following-robot-with-opencv-and-contour-based-approach-417b90f2c298
         turn_target: centroid of far-right pixels when the right-turn
             L-marker is visible. Checked on all detected pixels so the
             horizontal stroke registers even if it forms a separate blob.
@@ -124,50 +107,24 @@ class LineDetectorNode(Node):
         all_xs_abs = all_xs + x0
         all_ys_abs = all_ys + y0
 
-        # --- Largest blob → follow centroid ---
+        # Largest blob → follow centroid
         labeled, num_features = ndimage.label(mask)
         if num_features == 0:
             return mask, None, None
 
         sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
         largest_label = int(np.argmax(sizes)) + 1
+        if sizes[largest_label - 1] < self.min_blob_pixels:
+            return mask, None, None
 
         blob_ys, blob_xs = np.where(labeled == largest_label)
         blob_xs_abs = blob_xs + x0
         blob_ys_abs = blob_ys + y0
+        follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
 
-        # Ignore blobs that don't reach the bottom of the search window —
-        # the tape always runs to the bottom of the frame (it's on the floor).
-        # Floating blobs (reflections, background objects) won't touch y1.
-        if blob_ys_abs.max() < y1 - 2:
-            return mask, None, None
-
-        cx_f = float(np.mean(blob_xs_abs))
-        cy_f = float(np.mean(blob_ys_abs))
-        follow_centroid = (int(cx_f), int(cy_f))
-
-        turn_target = None
-
-        # --- Orientation-based early turn detection ---
-        if len(blob_xs) >= self.min_pixels_for_orientation:
-            dx = blob_xs_abs.astype(float) - cx_f
-            dy = blob_ys_abs.astype(float) - cy_f
-            mu11 = float(np.mean(dx * dy))
-            mu20 = float(np.mean(dx * dx))
-            mu02 = float(np.mean(dy * dy))
-            angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
-            if abs(np.cos(angle)) > self.horizontal_threshold:
-                mid_y = (y0 + y1) // 2
-                far_mask = blob_ys_abs < mid_y
-                if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
-                    turn_target = (
-                        int(np.mean(blob_xs_abs[far_mask])),
-                        int(np.mean(blob_ys_abs[far_mask])),
-                    )
-
-        # --- 90° right-turn override ---
-        # Far-right pixel cluster overrides the orientation-based target.
+        # Right-turn override
         right_mask = all_xs_abs > self.turn_right_threshold_x
+        turn_target = None
         if int(right_mask.sum()) >= self.turn_right_pixel_min:
             turn_target = (
                 int(np.mean(all_xs_abs[right_mask])),

@@ -33,10 +33,11 @@ class LineDetectorNode(Node):
         super().__init__("line_detector")
 
         # RGB thresholds for blue tape (image arrives as BGR).
-        # Tape color sampled as RGB(55, 129, 179) → BGR: B=179, G=129, R=55.
-        self.b_min = 100      # minimum blue channel value
-        self.br_margin = 45   # blue must exceed red by at least this  (tape: 124)
-        self.bg_margin = 20   # blue must exceed green by at least this (tape: 50)
+        # 8 samples taken across tape under varying light → BGR stats:
+        #   B channel: 106–196,  B-R: 80–136,  B-G: 34–56
+        self.b_min = 90       # floor is 106; 16-unit buffer for darker shadows
+        self.br_margin = 65   # floor is  80; 15-unit buffer
+        self.bg_margin = 25   # floor is  34;  9-unit buffer
         self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640
@@ -59,7 +60,10 @@ class LineDetectorNode(Node):
         # portion of the blob so the turn starts well before the L-marker
         # reaches the right edge.
         self.min_pixels_for_orientation = 100
-        self.horizontal_threshold = 0.6  # |cos(angle)| above this = turning
+        self.horizontal_threshold = 0.6   # |cos(angle)| above this = turning
+        self.min_elongation_ratio = 2.0   # lam1/lam2 must exceed this; rejects
+                                          # blob-shaped false positives (tape is
+                                          # always elongated, not round)
 
         self._setup_subscribers()
         self._setup_publishers()
@@ -136,14 +140,16 @@ class LineDetectorNode(Node):
         blob_ys, blob_xs = np.where(labeled == largest_label)
         blob_xs_abs = blob_xs + x0
         blob_ys_abs = blob_ys + y0
-        follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
 
-        # --- Orientation-based early turn detection ---
-        # Compute the angle of the blob's major axis via second-order moments.
-        # Straight tape ≈ vertical → |cos(angle)| ≈ 0.
-        # 90° turn ahead ≈ horizontal → |cos(angle)| → 1.
-        # When curving, steer toward the far (top) half of the blob so the
-        # robot starts turning before the L-marker reaches the right edge.
+        # --- Moments: shape filter + orientation ---
+        # Compute second-order moments once; use them for both:
+        #   1. Elongation check — rejects blob-shaped false positives.
+        #      lam1/lam2 is the eigenvalue ratio of the covariance matrix.
+        #      Tape is elongated (ratio >> 1); random blobs are round (ratio ≈ 1).
+        #      If the blob fails the shape check, follow_centroid stays None
+        #      (the right-turn check below still runs independently).
+        #   2. Orientation check — sets turn_target early when tape is horizontal.
+        follow_centroid = None
         turn_target = None
         if len(blob_xs) >= self.min_pixels_for_orientation:
             cx_f = float(np.mean(blob_xs_abs))
@@ -153,15 +159,27 @@ class LineDetectorNode(Node):
             mu11 = float(np.mean(dx * dy))
             mu20 = float(np.mean(dx * dx))
             mu02 = float(np.mean(dy * dy))
-            angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
-            if abs(np.cos(angle)) > self.horizontal_threshold:
-                mid_y = (y0 + y1) // 2
-                far_mask = blob_ys_abs < mid_y
-                if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
-                    turn_target = (
-                        int(np.mean(blob_xs_abs[far_mask])),
-                        int(np.mean(blob_ys_abs[far_mask])),
-                    )
+
+            trace = mu20 + mu02
+            det = mu20 * mu02 - mu11 ** 2
+            discriminant = max(0.0, (trace / 2) ** 2 - det)
+            lam1 = trace / 2 + discriminant ** 0.5
+            lam2 = max(trace / 2 - discriminant ** 0.5, 1e-6)
+
+            if lam1 / lam2 >= self.min_elongation_ratio:
+                follow_centroid = (int(cx_f), int(cy_f))
+
+                angle = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)
+                if abs(np.cos(angle)) > self.horizontal_threshold:
+                    mid_y = (y0 + y1) // 2
+                    far_mask = blob_ys_abs < mid_y
+                    if int(far_mask.sum()) >= self.min_pixels_for_orientation // 4:
+                        turn_target = (
+                            int(np.mean(blob_xs_abs[far_mask])),
+                            int(np.mean(blob_ys_abs[far_mask])),
+                        )
+        else:
+            follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
 
         # --- 90° right-turn override ---
         # Far-right pixel cluster overrides the orientation-based target.

@@ -1,0 +1,3 @@
+[submodule "src/slam_toolbox"]
+	path = src/slam_toolbox
+	url = git@github.com:stevemacenski/slam_toolbox.git

@@ -3,9 +3,10 @@
 <package format="3">
   <name>autonomy</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="avery.wagner@colorado.edu">student</maintainer>
-  <license>TODO: License declaration</license>
+  <description>slam toolbox bringup launch file for the Phase 3 ROS2 Racer localization stack</description>
+  <maintainer email="senayt.wolde@colorado.edu">student</maintainer>
+  <license>Apache-2.0</license>
+
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

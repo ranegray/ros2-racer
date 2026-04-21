@@ -6,6 +6,30 @@ from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
 
 
+def bgr_to_hsv(bgr):
+    bgr = bgr.astype(np.int32)
+    b, g, r = bgr[..., 0], bgr[..., 1], bgr[..., 2]
+    cmax = bgr.max(axis=-1)
+    cmin = bgr.min(axis=-1)
+    delta = cmax - cmin
+    v = cmax.astype(np.uint8)
+    s = np.zeros_like(cmax)
+    nz = cmax > 0
+    s[nz] = (255 * delta[nz]) // cmax[nz]
+    s = s.astype(np.uint8)
+    delta_f = delta.astype(np.float32)
+    hf = np.zeros_like(delta_f)
+    valid = delta > 0
+    rmax = valid & (cmax == r)
+    gmax = valid & (cmax == g) & ~rmax
+    bmax = valid & (cmax == b) & ~rmax & ~gmax
+    hf[rmax] = 30.0 * (g[rmax] - b[rmax]) / delta_f[rmax]
+    hf[gmax] = 60.0 + 30.0 * (b[gmax] - r[gmax]) / delta_f[gmax]
+    hf[bmax] = 120.0 + 30.0 * (r[bmax] - g[bmax]) / delta_f[bmax]
+    hf = hf % 180.0
+    return np.stack([hf.astype(np.uint8), s, v], axis=-1)
+
+
 def draw_rectangle(img, x0, y0, x1, y1, color, thickness=2):
     t = thickness
     img[y0:y0 + t, x0:x1] = color
@@ -32,12 +56,10 @@ class LineDetectorNode(Node):
     def __init__(self):
         super().__init__("line_detector")
 
-        # RGB thresholds for blue tape (image arrives as BGR).
-        # 8 samples taken across tape under varying light → BGR stats:
-        #   B channel: 106–196,  B-R: 80–136,  B-G: 34–56
-        self.b_min = 90       # floor is 106; 16-unit buffer for darker shadows
-        self.br_margin = 65   # floor is  80; 15-unit buffer
-        self.bg_margin = 25   # floor is  34;  9-unit buffer
+        # HSV thresholds — 7 samples converted to OpenCV HSV (H÷2, S/V ×2.55):
+        #   H: 101–104,  S: 130–222,  V: 105–194
+        self.color_lower = np.array([99,  120,  95])
+        self.color_upper = np.array([106, 232, 205])
 
         self.image_width = 640
         self.image_height = 480
@@ -106,15 +128,8 @@ class LineDetectorNode(Node):
         y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1]
 
-        b = cropped[..., 0].astype(np.int32)
-        g = cropped[..., 1].astype(np.int32)
-        r = cropped[..., 2].astype(np.int32)
-
-        mask = (
-            (b >= self.b_min) &
-            ((b - r) >= self.br_margin) &
-            ((b - g) >= self.bg_margin)
-        )
+        hsv = bgr_to_hsv(cropped)
+        mask = np.all((hsv >= self.color_lower) & (hsv <= self.color_upper), axis=-1)
 
         # All detected pixels (used for right-turn check)
         all_ys, all_xs = np.where(mask)

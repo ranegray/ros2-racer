@@ -44,7 +44,7 @@ class LineDetectorNode(Node):
         self.image_height = 480
 
         # Detection band (y_start, y_end, x_start, x_end)
-        self.band = (140, 380, 50, self.image_width - 50)
+        self.band = (140, 480, 50, self.image_width - 50)
 
         # 90° right-turn detection: far-right pixel cluster = horizontal
         # stroke of the L-marker. Checked across ALL detected pixels (not
@@ -135,6 +135,12 @@ class LineDetectorNode(Node):
         blob_ys, blob_xs = np.where(labeled == largest_label)
         blob_xs_abs = blob_xs + x0
         blob_ys_abs = blob_ys + y0
+
+        # Ignore blobs that don't reach the bottom of the search window —
+        # the tape always runs to the bottom of the frame (it's on the floor).
+        # Floating blobs (reflections, background objects) won't touch y1.
+        if blob_ys_abs.max() < y1 - 2:
+            return mask, None, None
 
         cx_f = float(np.mean(blob_xs_abs))
         cy_f = float(np.mean(blob_ys_abs))

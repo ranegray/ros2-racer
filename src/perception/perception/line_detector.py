@@ -43,7 +43,7 @@ class LineDetectorNode(Node):
         self.image_height = 480
 
         # Detection band (y_start, y_end, x_start, x_end)
-        self.band = (140, 380, 0, self.image_width)
+        self.band = (140, 380, 50, self.image_width - 50)
 
         # 90° right-turn detection: far-right pixel cluster = horizontal
         # stroke of the L-marker. Checked across ALL detected pixels (not

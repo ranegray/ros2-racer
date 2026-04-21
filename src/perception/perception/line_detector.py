@@ -58,8 +58,8 @@ class LineDetectorNode(Node):
 
         # HSV thresholds — 7 samples converted to OpenCV HSV (H÷2, S/V ×2.55):
         #   H: 101–104,  S: 130–222,  V: 105–194
-        self.color_lower = np.array([99,  120,  95])
-        self.color_upper = np.array([106, 232, 205])
+        self.color_lower = np.array([101, 130, 105])
+        self.color_upper = np.array([104, 222, 194])
 
         self.image_width = 640
         self.image_height = 480

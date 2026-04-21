@@ -7,27 +7,23 @@ from sensor_msgs.msg import Image
 
 
 def bgr_to_hsv(bgr):
-    bgr = bgr.astype(np.int32)
-    b, g, r = bgr[..., 0], bgr[..., 1], bgr[..., 2]
-    cmax = bgr.max(axis=-1)
-    cmin = bgr.min(axis=-1)
+    """Returns H in 0–360, S in 0–100, V in 0–100 (float32)."""
+    f = bgr.astype(np.float32) / 255.0
+    b, g, r = f[..., 0], f[..., 1], f[..., 2]
+    cmax = f.max(axis=-1)
+    cmin = f.min(axis=-1)
     delta = cmax - cmin
-    v = cmax.astype(np.uint8)
-    s = np.zeros_like(cmax)
-    nz = cmax > 0
-    s[nz] = (255 * delta[nz]) // cmax[nz]
-    s = s.astype(np.uint8)
-    delta_f = delta.astype(np.float32)
-    hf = np.zeros_like(delta_f)
+    v = cmax * 100.0
+    s = np.where(cmax > 0, delta / cmax * 100.0, 0.0)
+    h = np.zeros_like(delta)
     valid = delta > 0
     rmax = valid & (cmax == r)
     gmax = valid & (cmax == g) & ~rmax
     bmax = valid & (cmax == b) & ~rmax & ~gmax
-    hf[rmax] = 30.0 * (g[rmax] - b[rmax]) / delta_f[rmax]
-    hf[gmax] = 60.0 + 30.0 * (b[gmax] - r[gmax]) / delta_f[gmax]
-    hf[bmax] = 120.0 + 30.0 * (r[bmax] - g[bmax]) / delta_f[bmax]
-    hf = hf % 180.0
-    return np.stack([hf.astype(np.uint8), s, v], axis=-1)
+    h[rmax] = 60.0 * ((g[rmax] - b[rmax]) / delta[rmax] % 6)
+    h[gmax] = 60.0 * ((b[gmax] - r[gmax]) / delta[gmax] + 2)
+    h[bmax] = 60.0 * ((r[bmax] - g[bmax]) / delta[bmax] + 4)
+    return np.stack([h, s, v], axis=-1)
 
 
 def draw_rectangle(img, x0, y0, x1, y1, color, thickness=2):
@@ -58,8 +54,9 @@ class LineDetectorNode(Node):
 
         # HSV thresholds — 7 samples converted to OpenCV HSV (H÷2, S/V ×2.55):
         #   H: 101–104,  S: 130–222,  V: 105–194
-        self.color_lower = np.array([101, 130, 105])
-        self.color_upper = np.array([104, 222, 194])
+        # HSV thresholds — exact sample range (H: 0–360, S: 0–100, V: 0–100)
+        self.color_lower = np.array([202,  51, 41], dtype=np.float32)
+        self.color_upper = np.array([207,  87, 76], dtype=np.float32)
 
         self.image_width = 640
         self.image_height = 480

@@ -6,26 +6,6 @@ from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
 
 
-def bgr_to_hsv(bgr):
-    """Returns H in 0–360, S in 0–100, V in 0–100 (float32)."""
-    f = bgr.astype(np.float32) / 255.0
-    b, g, r = f[..., 0], f[..., 1], f[..., 2]
-    cmax = f.max(axis=-1)
-    cmin = f.min(axis=-1)
-    delta = cmax - cmin
-    v = cmax * 100.0
-    s = np.where(cmax > 0, delta / cmax * 100.0, 0.0)
-    h = np.zeros_like(delta)
-    valid = delta > 0
-    rmax = valid & (cmax == r)
-    gmax = valid & (cmax == g) & ~rmax
-    bmax = valid & (cmax == b) & ~rmax & ~gmax
-    h[rmax] = 60.0 * ((g[rmax] - b[rmax]) / delta[rmax] % 6)
-    h[gmax] = 60.0 * ((b[gmax] - r[gmax]) / delta[gmax] + 2)
-    h[bmax] = 60.0 * ((r[bmax] - g[bmax]) / delta[bmax] + 4)
-    return np.stack([h, s, v], axis=-1)
-
-
 def draw_rectangle(img, x0, y0, x1, y1, color, thickness=2):
     t = thickness
     img[y0:y0 + t, x0:x1] = color
@@ -54,9 +34,11 @@ class LineDetectorNode(Node):
 
         # HSV thresholds — 7 samples converted to OpenCV HSV (H÷2, S/V ×2.55):
         #   H: 101–104,  S: 130–222,  V: 105–194
-        # HSV thresholds — exact sample range (H: 0–360, S: 0–100, V: 0–100)
-        self.color_lower = np.array([202,  51, 41], dtype=np.float32)
-        self.color_upper = np.array([207,  87, 76], dtype=np.float32)
+        # RGB thresholds (image arrives as BGR)
+        # 8 samples → exact observed range: B:106–196, B-R:80–136, B-G:34–56
+        self.b_min = 106
+        self.br_margin = 80
+        self.bg_margin = 34
 
         self.image_width = 640
         self.image_height = 480
@@ -125,8 +107,14 @@ class LineDetectorNode(Node):
         y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1]
 
-        hsv = bgr_to_hsv(cropped)
-        mask = np.all((hsv >= self.color_lower) & (hsv <= self.color_upper), axis=-1)
+        b = cropped[..., 0].astype(np.int32)
+        g = cropped[..., 1].astype(np.int32)
+        r = cropped[..., 2].astype(np.int32)
+        mask = (
+            (b >= self.b_min) &
+            ((b - r) >= self.br_margin) &
+            ((b - g) >= self.bg_margin)
+        )
 
         # All detected pixels (used for right-turn check)
         all_ys, all_xs = np.where(mask)

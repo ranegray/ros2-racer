@@ -22,6 +22,14 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["wall_nav_node = autonomy.wall_nav_node:main"],
+        "console_scripts": [
+            "wall_nav_node = autonomy.wall_nav_node:main",
+            "wall_follower_node = autonomy.wall_follower_node:main",
+            "odometry_node = autonomy.odometry_node:main",
+            "imu_adapter_node = autonomy.imu_adapter_node:main",
+            "path_recorder_node = autonomy.path_recorder_node:main",
+            "pure_pursuit_node = autonomy.pure_pursuit_node:main",
+            "slam_coordinator_node = autonomy.slam_coordinator_node:main",
+        ],
     },
 )

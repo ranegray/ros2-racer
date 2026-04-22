@@ -19,12 +19,14 @@ from geometry_msgs.msg import Twist, Vector3
 
 # --- Tunable constants -------------------------------------------
 TARGET_DIST       = 0.90   # m — desired distance from right wall
-WALL_GONE_THRESH  = 3.0    # m — right wall gone above this
+WALL_GONE_THRESH  = 3.0    # m — a ray is "open" if it reads beyond this
+WALL_GONE_FRAC    = 0.70   # fraction of wide-band rays that must be open to count as wall-gone
+WALL_GONE_BAND    = 80     # ± degrees around -90° for the wide wall-gone check
 WALL_GONE_SCANS   = 15     # consecutive scans before committing to right turn (1.5 s @ 10 Hz)
 TURNING_YAW_GATE  = 0.25   # rad/s — suppress wall-gone if |gyro_z| > this
 FRONT_SLOW_THRESH = 0.8    # m — start slowing
 FRONT_STOP_THRESH = 0.45   # m — hard left turn
-RIGHT_CONE_DEG    = 60     # ± degrees around -90° for right-wall rays (wider = smoother)
+RIGHT_CONE_DEG    = 60     # ± degrees around -90° for PD wall-distance rays
 FRONT_CONE_DEG    = 40     # ± degrees around 0° for front rays
 
 KP = 1.2
@@ -82,6 +84,7 @@ class WallFollowerNode(Node):
         self._right_idx = []
         self._right_weights = np.array([])
         self._front_idx = []
+        self._wide_idx = []   # wide band for wall-gone fraction check
         self._idx_computed = False
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -106,10 +109,14 @@ class WallFollowerNode(Node):
             self._front_idx = _cone_indices(
                 msg.angle_min, msg.angle_increment, n, 0, FRONT_CONE_DEG
             )
+            self._wide_idx = _cone_indices(
+                msg.angle_min, msg.angle_increment, n, -90, WALL_GONE_BAND
+            )
             self._idx_computed = True
             self.get_logger().info(
                 f"Ray cones: right={len(self._right_idx)} rays, "
-                f"front={len(self._front_idx)} rays"
+                f"front={len(self._front_idx)} rays, "
+                f"wide={len(self._wide_idx)} rays"
             )
 
         ranges = np.array(msg.ranges, dtype=np.float32)
@@ -166,8 +173,16 @@ class WallFollowerNode(Node):
                 self._cmd_pub.publish(cmd)
                 return
 
-        # Wall-gone hysteresis + IMU gate: only count when going straight
-        if right_dist > WALL_GONE_THRESH and abs(self._gyro_z) < TURNING_YAW_GATE:
+        # Wall-gone: require WALL_GONE_FRAC of a wide band to be open.
+        # An entranceway opens a narrow slice; a real corner opens the whole right side.
+        wide_vals = ranges[self._wide_idx]
+        wide_valid = wide_vals[(wide_vals > msg.range_min) & np.isfinite(wide_vals)]
+        if len(wide_valid) > 0:
+            open_frac = float(np.mean(wide_valid > WALL_GONE_THRESH))
+        else:
+            open_frac = 0.0
+
+        if open_frac >= WALL_GONE_FRAC and abs(self._gyro_z) < TURNING_YAW_GATE:
             self._wall_gone_count += 1
         else:
             self._wall_gone_count = 0

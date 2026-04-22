@@ -23,15 +23,15 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.2   # proportional gain on follow-point offset
-        self.steering_kd = 1.0   # derivative gain on follow-point offset
+        self.steering_kp = 2.2   # proportional gain on follow-point offset
+        self.steering_kd = 1.5   # derivative gain on follow-point offset
         self.turn_steering_kp = (
             3.5   # proportional gain on turn-point offset (override)
         )
-        self.base_speed = 0.55  # forward speed when following (m/s)
-        self.turn_speed = 0.55  # forward speed when turning (m/s)
+        self.base_speed = 0.30  # forward speed when following (m/s)
+        self.turn_speed = 0.30  # forward speed when turning (m/s)
         self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
-        self.min_speed = 0.45   # floor — motors must always get at least this much throttle
+        self.min_speed = 0.22   # floor — motors must always get at least this much throttle
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
@@ -84,12 +84,7 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost — steer full toward the side we last saw it on
-            if self.last_known_offset > 0:
-                cmd.angular.z = 1.0    # full right
-            elif self.last_known_offset < 0:
-                cmd.angular.z = -1.0   # full left
-            cmd.linear.x = self.min_speed
+            # Line lost — hold position until we see something again.
             self.publisher_.publish(cmd)
             return
 

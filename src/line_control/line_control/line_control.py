@@ -28,7 +28,8 @@ class LineControlNode(Node):
         self.turn_steering_kp = 3.5  # proportional gain on turn-point offset (override)
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.45  # forward speed when turning (m/s)
-        self.speed_scale = 1.0  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.speed_scale = 1.0         # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.curvature_speed_scale = 0.4  # how much bend rate (d_offset) reduces speed; tune up to slow earlier
         self.min_speed = 0.35
         self.steering_trim = 0.12  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
@@ -79,6 +80,7 @@ class LineControlNode(Node):
         cmd = Twist()
         now = self._now_sec()
         max_angular = 2.0
+        d_offset = 0.0
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
@@ -153,8 +155,11 @@ class LineControlNode(Node):
         cmd.angular.z = max(-max_angular, min(max_angular, steer + self.steering_trim))
         # Normalize steering magnitude to [0,1] for the speed scaler so tuning semantics stay the same.
         steer_frac = abs(cmd.angular.z) / max_angular
+        # Also slow down when the offset is changing fast (bend detected early via D term).
+        curvature_frac = min(1.0, abs(d_offset) * self.curvature_speed_scale)
+        speed_reduction = max(steer_frac, curvature_frac)
         cmd.linear.x = max(
-            self.min_speed, speed * (1.0 - steer_frac * self.speed_scale)
+            self.min_speed, speed * (1.0 - speed_reduction * self.speed_scale)
         )
         self.publisher_.publish(cmd)
         self.get_logger().debug(

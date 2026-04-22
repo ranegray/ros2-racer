@@ -2,11 +2,11 @@
 """
 Full-system bringup for the ROS2 Racer.
 
-Starts the shared stack from ``master_bringup.launch.py`` and adds the
-higher-level perception/controller pieces needed to run the full robot.
+Starts the shared hardware stack directly and adds the higher-level
+perception/controller pieces needed to run the full robot.
 
 Perception brought up by default:
-  - wall distance        (perception/depth_node via master bringup)
+  - wall distance        (perception/depth_node)
   - line detection       (perception/line_detector)
 
 Controller selector:
@@ -21,7 +21,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -74,29 +74,77 @@ def generate_launch_description():
         default_value='50',
         description='JPEG compression quality for camera frames (0-100)',
     )
+    enable_lidar = PythonExpression([
+        "'",
+        LaunchConfiguration('controller'),
+        "' != 'line'",
+    ])
 
-    master_bringup = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('racer_bringup'),
-                'launch',
-                'master_bringup.launch.py',
-            )
-        ),
-        launch_arguments={
-            'lidar_port': LaunchConfiguration('lidar_port'),
-            'lidar_baudrate': LaunchConfiguration('lidar_baudrate'),
-            'rover_port': LaunchConfiguration('rover_port'),
-            'rover_baudrate': LaunchConfiguration('rover_baudrate'),
-            'telemetry_rate': LaunchConfiguration('telemetry_rate'),
+    lidar_node = Node(
+        package='rplidar_ros',
+        executable='rplidar_node',
+        name='rplidar_node',
+        parameters=[{
+            'channel_type': 'serial',
+            'serial_port': LaunchConfiguration('lidar_port'),
+            'serial_baudrate': LaunchConfiguration('lidar_baudrate'),
+            'frame_id': 'laser',
+            'inverted': False,
+            'angle_compensate': True,
+        }],
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    realsense_node = Node(
+        package='rs_stream',
+        executable='rs_stream_node',
+        name='rs_stream_node',
+        output='screen',
+    )
+
+    depth_node = Node(
+        package='perception',
+        executable='depth_node',
+        name='depth_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    rover_node = Node(
+        package='robo_rover',
+        executable='rover_node',
+        name='rover_node',
+        output='screen',
+        emulate_tty=True,
+        parameters=[{
+            'connection_string': LaunchConfiguration('rover_port'),
+            'baud_rate': LaunchConfiguration('rover_baudrate'),
+            'control_frequency': 20.0,
+            'imu_frequency': 20.0,
+        }],
+    )
+
+    telemetry_node = Node(
+        package='telemetry',
+        executable='telemetry_node',
+        name='telemetry_node',
+        parameters=[{
+            'publish_rate': LaunchConfiguration('telemetry_rate'),
             'camera_rate': LaunchConfiguration('camera_rate'),
             'image_quality': LaunchConfiguration('image_quality'),
-            'enable_lidar': PythonExpression([
-                "'",
-                LaunchConfiguration('controller'),
-                "' != 'line'",
-            ]),
-        }.items(),
+        }],
+        output='screen',
+    )
+
+    rosbridge_launch = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('rosbridge_server'),
+                'launch',
+                'rosbridge_websocket_launch.xml',
+            )
+        )
     )
 
     line_detector = Node(
@@ -137,7 +185,12 @@ def generate_launch_description():
                 LaunchConfiguration('controller'),
             ]
         ),
-        master_bringup,
+        lidar_node,
+        realsense_node,
+        depth_node,
+        rover_node,
+        telemetry_node,
+        rosbridge_launch,
         line_detector,
         line_control,
         wall_nav,

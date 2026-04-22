@@ -23,12 +23,12 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 1.3  # proportional gain on follow-point offset
-        self.steering_kd = 2.5  # derivative gain on follow-point offset
+        self.steering_kp = 1.2  # proportional gain on follow-point offset
+        self.steering_kd = 2.0  # derivative gain on follow-point offset
         self.turn_steering_kp = 3.5  # proportional gain on turn-point offset (override)
-        self.base_speed = 0.33  # forward speed when following (m/s)
-        self.turn_speed = 0.33  # forward speed when turning (m/s)
-        self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.base_speed = 0.55  # forward speed when following (m/s)
+        self.turn_speed = 0.55  # forward speed when turning (m/s)
+        self.speed_scale = 1.0  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
         self.min_speed = (
             0.30  # floor — motors must always get at least this much throttle
         )
@@ -42,10 +42,12 @@ class LineControlNode(Node):
         )
 
         # Reverse recovery when the line is lost
-        self.reverse_speed = 0.22        # m/s (published as negative linear.x)
-        self.reverse_debounce = 0.3      # s line must be missing before reversing
+        self.reverse_speed = 0.22  # m/s (published as negative linear.x)
+        self.reverse_debounce = 0.3  # s line must be missing before reversing
         self.reverse_duration_cap = 1.0  # max time to spend reversing before giving up
-        self.reverse_cooldown = 0.5      # s to hold still after reversing before another attempt
+        self.reverse_cooldown = (
+            0.5  # s to hold still after reversing before another attempt
+        )
         self.last_line_seen_sec = None
         self.reverse_start_sec = None
         self.cooldown_end_sec = None
@@ -121,8 +123,7 @@ class LineControlNode(Node):
             )
             seen_ever = self.last_line_seen_sec is not None
             debounce_passed = (
-                seen_ever
-                and (now - self.last_line_seen_sec) >= self.reverse_debounce
+                seen_ever and (now - self.last_line_seen_sec) >= self.reverse_debounce
             )
             # Only reverse if we've actually seen a line at some point — don't back up at startup.
             if seen_ever and debounce_passed and not in_cooldown:

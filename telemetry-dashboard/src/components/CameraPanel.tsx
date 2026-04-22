@@ -18,12 +18,15 @@ function mimeFor(format: string | undefined): string {
   return 'image/jpeg'
 }
 
-function toBuffer(data: string | Uint8Array | ArrayBuffer): ArrayBuffer {
+function toBuffer(data: string | Uint8Array | ArrayBuffer | number[]): ArrayBuffer {
   if (typeof data === 'string') {
     return Uint8Array.from(atob(data), (c) => c.charCodeAt(0)).buffer as ArrayBuffer
   }
+  if (Array.isArray(data)) {
+    return new Uint8Array(data).buffer as ArrayBuffer
+  }
   if (data instanceof ArrayBuffer) return data
-  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer as ArrayBuffer
+  return new Uint8Array((data as any).buffer, (data as any).byteOffset, (data as any).byteLength).slice().buffer as ArrayBuffer
 }
 
 export const CameraPanel = memo(function CameraPanel({
@@ -64,7 +67,8 @@ export const CameraPanel = memo(function CameraPanel({
             hasFrameRef.current = true
             setHasFrame(true)
           }
-        } catch {
+        } catch (e) {
+          console.error("Decode failed:", e)
           /* decode failed — drop this frame */
         }
       }

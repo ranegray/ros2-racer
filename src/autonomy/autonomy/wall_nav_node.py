@@ -33,7 +33,6 @@ from geometry_msgs.msg import Twist, Vector3
 class WallNavNode(Node):
     def __init__(self):
         super().__init__("wall_nav_node")
-
         self._setup_parameters()
         self._setup_subscriptions()
         self._setup_publishers()
@@ -181,7 +180,9 @@ class WallNavNode(Node):
         """Wrap an angle to (-pi, pi]."""
         return math.atan2(math.sin(angle), math.cos(angle))
 
-    def _ray_at_angle(self, msg: LaserScan, target_angle: float, half_window: float) -> float:
+    def _ray_at_angle(
+        self, msg: LaserScan, target_angle: float, half_window: float
+    ) -> float:
         """Mean of valid rays within `half_window` of `target_angle`. NaN if none."""
         target = self._wrap(target_angle)
         readings = []
@@ -279,9 +280,7 @@ class WallNavNode(Node):
         # a window from masquerading as a corner entry.
         stale_s = self.get_parameter("spike_stale_s").value
         max_d_jump = self.get_parameter("max_d_jump").value
-        max_alpha_jump = math.radians(
-            self.get_parameter("max_alpha_jump_deg").value
-        )
+        max_alpha_jump = math.radians(self.get_parameter("max_alpha_jump_deg").value)
         is_spike = False
         if (
             math.isfinite(D_ahead)
@@ -307,9 +306,7 @@ class WallNavNode(Node):
 
         # Current-frame wall-lost determination.
         wall_lost_now = (
-            (not math.isfinite(D_ahead))
-            or D_ahead > max_plausible
-            or is_spike
+            (not math.isfinite(D_ahead)) or D_ahead > max_plausible or is_spike
         )
 
         # Sticky recovery: a single valid scan does NOT end lost mode.
@@ -327,8 +324,7 @@ class WallNavNode(Node):
 
         recovery_scans = self.get_parameter("lost_recovery_scans").value
         treat_as_lost = wall_lost_now or (
-            self._lost_since is not None
-            and self._valid_run < recovery_scans
+            self._lost_since is not None and self._valid_run < recovery_scans
         )
 
         # Wall lost: doorways/windows lose it briefly, right-turn corners
@@ -358,9 +354,7 @@ class WallNavNode(Node):
                 # Execute the 90° right turn at full lock. Raw post-sign
                 # value (no flip, no clamp, no bias) — +2.0 = full-lock
                 # RIGHT on the inverted rover.
-                cmd.angular.z = float(
-                    self.get_parameter("lost_turn_steering").value
-                )
+                cmd.angular.z = float(self.get_parameter("lost_turn_steering").value)
                 mode = "turn"
             else:
                 # Turn complete. Release the lost cycle. If the wall is
@@ -389,9 +383,7 @@ class WallNavNode(Node):
         k_yaw = self.get_parameter("k_yaw").value
         max_steer = self.get_parameter("max_steering").value
         v_max = self.get_parameter("forward_speed").value
-        alpha_scale = math.radians(
-            self.get_parameter("speed_alpha_scale_deg").value
-        )
+        alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         d_alpha = self.get_parameter("d_error_alpha").value
         max_error = self.get_parameter("max_error").value
 

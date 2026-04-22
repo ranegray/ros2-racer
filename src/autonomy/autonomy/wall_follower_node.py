@@ -20,10 +20,11 @@ from geometry_msgs.msg import Twist, Vector3
 # --- Tunable constants -------------------------------------------
 TARGET_DIST       = 0.90   # m — desired distance from right wall
 WALL_GONE_THRESH  = 3.0    # m — a ray is "open" if it reads beyond this
-WALL_GONE_FRAC    = 0.70   # fraction of wide-band rays that must be open to count as wall-gone
+WALL_GONE_FRAC    = 0.40   # fraction of wide-band rays that must be open to count as wall-gone
 WALL_GONE_BAND    = 80     # ± degrees around -90° for the wide wall-gone check
 WALL_GONE_SCANS   = 15     # consecutive scans before committing to right turn (1.5 s @ 10 Hz)
 TURNING_YAW_GATE  = 0.25   # rad/s — suppress wall-gone if |gyro_z| > this
+PD_DIST_CAP       = 1.5    # m — clamp right_dist in PD so large openings don't cause max steer
 FRONT_SLOW_THRESH = 0.8    # m — start slowing
 FRONT_STOP_THRESH = 0.45   # m — hard left turn
 RIGHT_CONE_DEG    = 60     # ± degrees around -90° for PD wall-distance rays
@@ -33,8 +34,8 @@ KP = 1.2
 KD = 0.4
 
 BASE_SPEED  = 0.40
-TURN_SPEED  = 0.28
-HARD_STEER  = 1.2
+TURN_SPEED  = 0.20
+HARD_STEER  = 0.9
 MAX_STEER   = 2.0
 # -----------------------------------------------------------------
 
@@ -198,8 +199,9 @@ class WallFollowerNode(Node):
             self._cmd_pub.publish(cmd)
             return
 
-        # PD wall follow
-        error = right_dist - TARGET_DIST
+        # PD wall follow — cap distance so large openings don't cause max steer
+        right_dist_pd = min(right_dist, PD_DIST_CAP)
+        error = right_dist_pd - TARGET_DIST
         d_error = (error - self._prev_error) / dt
         self._prev_error = error
 

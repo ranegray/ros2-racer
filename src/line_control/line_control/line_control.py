@@ -39,13 +39,13 @@ class LineControlNode(Node):
             0.0  # sign of last seen offset; drives recovery steer when line is lost
         )
 
-        # Reverse recovery when the line is lost
-        self.reverse_speed = 0.22  # m/s (published as negative linear.x)
-        self.reverse_debounce = 0.3  # s line must be missing before reversing
+        # Recovery when the line is lost:
+        #   Phase 1 — hard steer in the last known direction for lost_steer_duration
+        #   Phase 2 — reverse for up to reverse_duration_cap, then cooldown/stop
+        self.lost_steer_duration = 1.0   # s to steer hard before reversing
+        self.reverse_speed = 0.22        # m/s (published as negative linear.x)
         self.reverse_duration_cap = 1.0  # max time to spend reversing before giving up
-        self.reverse_cooldown = (
-            0.5  # s to hold still after reversing before another attempt
-        )
+        self.reverse_cooldown = 0.5      # s to hold still after reversing
         self.last_line_seen_sec = None
         self.reverse_start_sec = None
         self.cooldown_end_sec = None
@@ -105,7 +105,12 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost. If we've been reversing, keep reversing until the cap, then cool down.
+            # Recovery sequence:
+            #   Phase 1: hard steer toward last known direction for lost_steer_duration
+            #   Phase 2: reverse for up to reverse_duration_cap, then cooldown/stop
+            seen_ever = self.last_line_seen_sec is not None
+
+            # Already in reverse phase — keep going.
             if self.reverse_start_sec is not None:
                 if now - self.reverse_start_sec >= self.reverse_duration_cap:
                     self.reverse_start_sec = None
@@ -116,19 +121,25 @@ class LineControlNode(Node):
                 self.publisher_.publish(cmd)
                 return
 
-            in_cooldown = (
-                self.cooldown_end_sec is not None and now < self.cooldown_end_sec
-            )
-            seen_ever = self.last_line_seen_sec is not None
-            debounce_passed = (
-                seen_ever and (now - self.last_line_seen_sec) >= self.reverse_debounce
-            )
-            # Only reverse if we've actually seen a line at some point — don't back up at startup.
-            if seen_ever and debounce_passed and not in_cooldown:
-                self.reverse_start_sec = now
-                cmd.linear.x = -self.reverse_speed
+            # Cooldown after reverse — hold still.
+            if self.cooldown_end_sec is not None and now < self.cooldown_end_sec:
                 self.publisher_.publish(cmd)
                 return
+
+            if not seen_ever:
+                self.publisher_.publish(cmd)
+                return
+
+            lost_for = now - self.last_line_seen_sec
+
+            if lost_for < self.lost_steer_duration:
+                # Phase 1: hard steer in the last known direction.
+                cmd.angular.z = max_angular if self.last_known_offset >= 0 else -max_angular
+                cmd.linear.x = self.min_speed
+            else:
+                # Phase 2: start reversing.
+                self.reverse_start_sec = now
+                cmd.linear.x = -self.reverse_speed
 
             self.publisher_.publish(cmd)
             return

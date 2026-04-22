@@ -31,8 +31,8 @@ from geometry_msgs.msg import Twist
 
 
 # --- Tunable constants -------------------------------------------
-TARGET_DIST      = 0.65   # m — desired distance from right wall
-WALL_GONE_THRESH = 1.5    # m — right wall considered gone above this
+TARGET_DIST      = 0.90   # m — desired distance from right wall
+WALL_GONE_THRESH = 1.8    # m — right wall considered gone above this
 FRONT_SLOW_THRESH = 0.8   # m — start slowing when front closer than this
 FRONT_STOP_THRESH = 0.45  # m — turn left hard when front closer than this
 RIGHT_CONE_DEG   = 20     # ± degrees around -90° for right-wall rays

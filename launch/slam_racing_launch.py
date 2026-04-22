@@ -38,7 +38,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("connection_string", default_value="/dev/ttyACM1"),
         DeclareLaunchArgument("baud_rate", default_value="115200"),
-        DeclareLaunchArgument("wheelbase", default_value="0.25"),
+        DeclareLaunchArgument("wheelbase", default_value="0.165"),
         DeclareLaunchArgument("lookahead", default_value="0.5",
                               description="Pure pursuit lookahead distance (m)"),
         DeclareLaunchArgument("speed", default_value="0.35",
@@ -61,12 +61,12 @@ def generate_launch_description():
             }],
         ),
 
-        # Static TF: base_link → laser (keep same as mapping launch)
+        # Static TF: base_link → laser (must match mapping launch exactly)
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             name="base_link_to_laser",
-            arguments=["0.0", "0.0", "0.1", "0.0", "0.0", "0.0",
+            arguments=["0.05", "0.0", "0.19", "0.0", "0.0", "0.0",
                        "base_link", "laser"],
             output="screen",
         ),

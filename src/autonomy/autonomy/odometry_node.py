@@ -32,7 +32,7 @@ class OdometryNode(Node):
     def __init__(self):
         super().__init__("odometry_node")
 
-        self.declare_parameter("wheelbase", 0.25)  # metres — measure on rover
+        self.declare_parameter("wheelbase", 0.165)  # metres — 6.5 in rear-to-front axle
         self.L = self.get_parameter("wheelbase").value
 
         self._x = 0.0

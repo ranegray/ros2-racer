@@ -43,7 +43,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("connection_string", default_value="/dev/ttyACM1"),
         DeclareLaunchArgument("baud_rate", default_value="115200"),
-        DeclareLaunchArgument("wheelbase", default_value="0.25",
+        DeclareLaunchArgument("wheelbase", default_value="0.165",
                               description="Rover wheelbase in metres"),
 
         # RPLIDAR A1 — publishes /scan with frame_id=laser
@@ -64,13 +64,13 @@ def generate_launch_description():
         ),
 
         # Static TF: base_link → laser
-        # MEASURE the lidar mounting offset and update x/y/z/yaw below.
-        # Convention: x forward, y left, z up (ROS REP-105).
+        # base_link = rear axle center at ground level.
+        # Lidar: 0.05 m ahead of rear axle, centered, 0.19 m above ground.
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
             name="base_link_to_laser",
-            arguments=["0.0", "0.0", "0.1", "0.0", "0.0", "0.0",
+            arguments=["0.05", "0.0", "0.19", "0.0", "0.0", "0.0",
                        "base_link", "laser"],
             output="screen",
         ),

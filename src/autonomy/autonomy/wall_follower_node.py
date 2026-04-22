@@ -32,7 +32,7 @@ from geometry_msgs.msg import Twist
 
 # --- Tunable constants -------------------------------------------
 TARGET_DIST      = 0.90   # m — desired distance from right wall
-WALL_GONE_THRESH = 1.8    # m — right wall considered gone above this
+WALL_GONE_THRESH = 3.0    # m — right wall considered gone above this (high to avoid doorway false triggers)
 FRONT_SLOW_THRESH = 0.8   # m — start slowing when front closer than this
 FRONT_STOP_THRESH = 0.45  # m — turn left hard when front closer than this
 RIGHT_CONE_DEG   = 20     # ± degrees around -90° for right-wall rays
@@ -43,7 +43,7 @@ KD = 0.4           # derivative gain
 
 BASE_SPEED  = 0.40   # m/s forward during mapping
 TURN_SPEED  = 0.28   # m/s during hard turns
-HARD_STEER  = 1.6    # rad/s for hard-turn overrides
+HARD_STEER  = 1.2    # rad/s for hard-turn overrides (softer to avoid wall crashes on false trigger)
 MAX_STEER   = 2.0    # rad/s cap
 # -----------------------------------------------------------------
 
@@ -121,7 +121,7 @@ class WallFollowerNode(Node):
 
         # Front obstacle — turn left (negative = left on this rover)
         if front_dist < FRONT_STOP_THRESH:
-            cmd.linear.x = TURN_SPEED * 0.5
+            cmd.linear.x = TURN_SPEED * 0.3
             cmd.angular.z = -HARD_STEER
             self._cmd_pub.publish(cmd)
             self.get_logger().debug(f"FRONT OBSTACLE {front_dist:.2f} m — turning left")

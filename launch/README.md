@@ -8,6 +8,8 @@ ros2 launch racer_bringup <launch_file>
 
 The main entrypoint is `system_launch.py`. It starts the shared hardware stack from `master_bringup.launch.py` and then enables a controller mode with the `controller` launch argument.
 
+By default, the shared stack includes lidar. The exception is `controller:=line`, which skips the lidar and lidar-based depth nodes because line following only needs the camera stack.
+
 ## Recommended launch
 
 Start the full system with no controller:
@@ -21,6 +23,8 @@ Start line following:
 ```bash
 ros2 launch racer_bringup system_launch.py controller:=line
 ```
+
+This mode skips lidar bringup.
 
 Start wall following:
 

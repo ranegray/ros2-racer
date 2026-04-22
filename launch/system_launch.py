@@ -91,6 +91,11 @@ def generate_launch_description():
             'telemetry_rate': LaunchConfiguration('telemetry_rate'),
             'camera_rate': LaunchConfiguration('camera_rate'),
             'image_quality': LaunchConfiguration('image_quality'),
+            'enable_lidar': PythonExpression([
+                "'",
+                LaunchConfiguration('controller'),
+                "' != 'line'",
+            ]),
         }.items(),
     )
 

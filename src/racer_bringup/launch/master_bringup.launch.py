@@ -24,6 +24,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -66,11 +67,17 @@ def generate_launch_description():
         default_value='50',
         description='JPEG compression quality for camera frames (0-100)',
     )
+    enable_lidar_arg = DeclareLaunchArgument(
+        'enable_lidar',
+        default_value='true',
+        description='Whether to start the lidar and lidar-based depth perception stack',
+    )
 
     lidar_port = LaunchConfiguration('lidar_port')
     lidar_baudrate = LaunchConfiguration('lidar_baudrate')
     rover_port = LaunchConfiguration('rover_port')
     rover_baudrate = LaunchConfiguration('rover_baudrate')
+    enable_lidar = LaunchConfiguration('enable_lidar')
 
     # ── 1. LIDAR ─────────────────────────────────────────────────────────────
     lidar_node = Node(
@@ -86,6 +93,7 @@ def generate_launch_description():
             'angle_compensate': True,
         }],
         output='screen',
+        condition=IfCondition(enable_lidar),
     )
 
     # ── 2. RealSense ─────────────────────────────────────────────────────────
@@ -102,6 +110,7 @@ def generate_launch_description():
         executable='depth_node',
         name='depth_node',
         output='screen',
+        condition=IfCondition(enable_lidar),
     )
 
     # ── 4. Hardware Bridge ───────────────────────────────────────────────────
@@ -152,6 +161,7 @@ def generate_launch_description():
         telemetry_rate_arg,
         camera_rate_arg,
         image_quality_arg,
+        enable_lidar_arg,
 
         # Startup banner
         LogInfo(msg='[racer_bringup] Starting shared hardware and infrastructure stack...'),

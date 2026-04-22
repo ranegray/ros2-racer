@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "5173:5173"
+    environment:
+      # Dashboard will connect to pi's rosbridge on this address
+      # Teams can override by setting in their environment:
+      # export ROS_BRIDGE_URL=ws://100.86.204.127:9090
+      ROS_BRIDGE_URL: ws://100.86.204.127:9090
+    networks:
+      - racer-network
+
+networks:
+  racer-network:
+    driver: bridge

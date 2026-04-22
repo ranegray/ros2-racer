@@ -10,6 +10,7 @@ Perception brought up by default:
   - line detection       (perception/line_detector)
 
 Controller selector:
+  - none   : no controller
   - line   : line_control
   - wall   : wall_nav_node
 """
@@ -34,8 +35,8 @@ def _controller_is(name: str):
 def generate_launch_description():
     line_arg = DeclareLaunchArgument(
         'line',
-        default_value='line',
-        description='Controller to start: line or wall',
+        default_value='none',
+        description='Controller to start: none, line, or wall',
     )
 
     lidar_port_arg = DeclareLaunchArgument(
@@ -131,6 +132,6 @@ def generate_launch_description():
         line_control,
         wall_nav,
         LogInfo(
-            msg='[racer_bringup] Full system launched. Supported controllers: line, wall.'
+            msg='[racer_bringup] Full system launched. Supported controllers: none, line, wall.'
         ),
     ])

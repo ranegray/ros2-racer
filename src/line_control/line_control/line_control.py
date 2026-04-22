@@ -33,7 +33,9 @@ class LineControlNode(Node):
         self.steering_trim = 0.12  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
-        self.prev_offset = 0.0  # previous normalized offset for D term
+        self.prev_offset = 0.0      # previous smoothed offset for D term
+        self.smoothed_offset = 0.0  # EMA-filtered offset; kills centroid jitter before derivative
+        self.offset_alpha = 0.35    # EMA weight on new sample (lower = smoother, more lag)
         self.dt = 0.1  # control loop period (s)
         self.last_known_offset = (
             0.0  # sign of last seen offset; drives recovery steer when line is lost
@@ -100,10 +102,11 @@ class LineControlNode(Node):
             self.last_known_offset = offset
         elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
-            d_offset = (offset - self.prev_offset) / self.dt
-            self.prev_offset = offset
+            self.smoothed_offset = self.offset_alpha * offset + (1.0 - self.offset_alpha) * self.smoothed_offset
+            d_offset = (self.smoothed_offset - self.prev_offset) / self.dt
+            self.prev_offset = self.smoothed_offset
             self.last_known_offset = offset
-            steer = self.steering_kp * offset + self.steering_kd * d_offset
+            steer = self.steering_kp * self.smoothed_offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
             # Recovery sequence:

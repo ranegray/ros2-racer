@@ -119,7 +119,7 @@ class LineControlNode(Node):
                     self.publisher_.publish(cmd)
                     return
                 cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = -max_angular if self.last_known_offset >= 0 else max_angular
+                cmd.angular.z = max_angular if self.last_known_offset >= 0 else -max_angular
                 self.publisher_.publish(cmd)
                 return
 

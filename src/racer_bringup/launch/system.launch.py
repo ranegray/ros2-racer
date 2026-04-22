@@ -14,13 +14,10 @@ Controller selector:
   - wall   : wall_nav_node
 """
 
-import os
-
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
 )
@@ -30,30 +27,10 @@ from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
-def _default_dashboard_dir():
-    """Best-effort guess at <repo>/telemetry-dashboard."""
-    try:
-        launch_dir = os.path.dirname(os.path.realpath(__file__))
-        repo_root = os.path.abspath(os.path.join(launch_dir, '..', '..', '..', '..'))
-        candidate = os.path.join(repo_root, 'telemetry-dashboard')
-        if os.path.isdir(candidate):
-            return candidate
-    except Exception:
-        pass
-    return os.path.expanduser('~/ros2-racer/telemetry-dashboard')
-
-
 def _controller_is(name: str):
     return IfCondition(
         PythonExpression(["'", LaunchConfiguration('line'), "' == '", name, "'"])
     )
-
-
-def _bool_expr(*parts: str):
-    expr = []
-    for part in parts:
-        expr.append(part)
-    return IfCondition(PythonExpression(expr))
 
 
 def generate_launch_description():
@@ -61,21 +38,6 @@ def generate_launch_description():
         'line',
         default_value='line',
         description='Controller to start: line or wall',
-    )
-    dashboard_arg = DeclareLaunchArgument(
-        'dashboard',
-        default_value='true',
-        description='If true, bring up the telemetry dashboard docker stack',
-    )
-    dashboard_dir_arg = DeclareLaunchArgument(
-        'dashboard_dir',
-        default_value=_default_dashboard_dir(),
-        description='Directory containing telemetry-dashboard/docker-compose.yml',
-    )
-    rebuild_dashboard_arg = DeclareLaunchArgument(
-        'rebuild_dashboard',
-        default_value='false',
-        description='If true, run `docker compose up --build` for the dashboard',
     )
 
     lidar_port_arg = DeclareLaunchArgument(
@@ -113,8 +75,6 @@ def generate_launch_description():
         default_value='50',
         description='JPEG compression quality for camera frames (0-100)',
     )
-
-    dashboard_dir = LaunchConfiguration('dashboard_dir')
 
     master_bringup = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -158,33 +118,8 @@ def generate_launch_description():
         condition=_controller_is('wall'),
     )
 
-    dashboard_proc = ExecuteProcess(
-        cmd=['docker', 'compose', 'up'],
-        cwd=dashboard_dir,
-        output='screen',
-        shell=False,
-        condition=_bool_expr(
-            "'", LaunchConfiguration('dashboard'), "' == 'true' and ",
-            "'", LaunchConfiguration('rebuild_dashboard'), "' != 'true'",
-        ),
-    )
-
-    dashboard_proc_build = ExecuteProcess(
-        cmd=['docker', 'compose', 'up', '--build'],
-        cwd=dashboard_dir,
-        output='screen',
-        shell=False,
-        condition=_bool_expr(
-            "'", LaunchConfiguration('dashboard'), "' == 'true' and ",
-            "'", LaunchConfiguration('rebuild_dashboard'), "' == 'true'",
-        ),
-    )
-
     return LaunchDescription([
         line_arg,
-        dashboard_arg,
-        dashboard_dir_arg,
-        rebuild_dashboard_arg,
         lidar_port_arg,
         lidar_baudrate_arg,
         rover_port_arg,
@@ -199,8 +134,6 @@ def generate_launch_description():
         line_detector,
         line_control,
         wall_nav,
-        dashboard_proc,
-        dashboard_proc_build,
 
         LogInfo(
             msg='[racer_bringup] Full system launched. Supported controllers: line, wall.'

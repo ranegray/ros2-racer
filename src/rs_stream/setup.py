@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "rs_stream_node = rs_stream.rs_stream_node:main",
+            "snap_node = rs_stream.snap_node:main",
         ],
     },
 )

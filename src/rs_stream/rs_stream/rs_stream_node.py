@@ -2,6 +2,7 @@
 import time
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import pyrealsense2 as rs
@@ -10,7 +11,12 @@ import numpy as np
 class RealsenseColorPublisher(Node):
     def __init__(self, width=640, height=480, fps=30):
         super().__init__('realsense_color_publisher')
-        self.pub = self.create_publisher(Image, '/camera/color/image_raw', 10)
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5
+        )
+        self.pub = self.create_publisher(Image, '/camera/color/image_raw', sensor_qos)
         self.bridge = CvBridge()
 
         # Hardware-reset the device to release any stale USB handles
@@ -47,7 +53,9 @@ class RealsenseColorPublisher(Node):
 
     def capture_and_publish(self):
         try:
-            frames = self.pipe.wait_for_frames(timeout_ms=1000)
+            success, frames = self.pipe.try_wait_for_frames(timeout_ms=5)
+            if not success:
+                return
             color  = frames.get_color_frame()
             if not color:
                 return

@@ -31,7 +31,7 @@ from geometry_msgs.msg import Twist
 
 
 # --- Tunable constants -------------------------------------------
-TARGET_DIST      = 0.45   # m — desired distance from right wall
+TARGET_DIST      = 0.65   # m — desired distance from right wall
 WALL_GONE_THRESH = 1.5    # m — right wall considered gone above this
 FRONT_SLOW_THRESH = 0.8   # m — start slowing when front closer than this
 FRONT_STOP_THRESH = 0.45  # m — turn left hard when front closer than this
@@ -41,8 +41,8 @@ FRONT_CONE_DEG   = 40     # ± degrees around 0° for front rays
 KP = 1.2           # proportional gain
 KD = 0.4           # derivative gain
 
-BASE_SPEED  = 0.30   # m/s forward during mapping (slow for good scan overlap)
-TURN_SPEED  = 0.20   # m/s during hard turns
+BASE_SPEED  = 0.40   # m/s forward during mapping
+TURN_SPEED  = 0.28   # m/s during hard turns
 HARD_STEER  = 1.6    # rad/s for hard-turn overrides
 MAX_STEER   = 2.0    # rad/s cap
 # -----------------------------------------------------------------

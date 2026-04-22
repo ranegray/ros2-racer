@@ -41,6 +41,15 @@ class LineControlNode(Node):
             0.0  # sign of last seen offset; drives recovery steer when line is lost
         )
 
+        # Reverse recovery when the line is lost
+        self.reverse_speed = 0.22        # m/s (published as negative linear.x)
+        self.reverse_debounce = 0.3      # s line must be missing before reversing
+        self.reverse_duration_cap = 1.0  # max time to spend reversing before giving up
+        self.reverse_cooldown = 0.5      # s to hold still after reversing before another attempt
+        self.last_line_seen_sec = None
+        self.reverse_start_sec = None
+        self.cooldown_end_sec = None
+
         self.get_logger().info("Line Control Node has started!")
 
     def _follow_callback(self, msg):
@@ -66,9 +75,17 @@ class LineControlNode(Node):
 
     def control_loop(self):
         cmd = Twist()
+        now = self._now_sec()
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
+
+        if follow is not None or turn is not None:
+            self.last_line_seen_sec = now
+            # Re-acquired while reversing — bail out of reverse and resume normal control.
+            if self.reverse_start_sec is not None:
+                self.reverse_start_sec = None
+                self.cooldown_end_sec = None
 
         if turn is not None:
             # Right-turn override: detector saw a chunk of tape far to the right.
@@ -88,7 +105,32 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost — hold position until we see something again.
+            # Line lost. If we've been reversing, keep reversing until the cap, then cool down.
+            if self.reverse_start_sec is not None:
+                if now - self.reverse_start_sec >= self.reverse_duration_cap:
+                    self.reverse_start_sec = None
+                    self.cooldown_end_sec = now + self.reverse_cooldown
+                    self.publisher_.publish(cmd)
+                    return
+                cmd.linear.x = -self.reverse_speed
+                self.publisher_.publish(cmd)
+                return
+
+            in_cooldown = (
+                self.cooldown_end_sec is not None and now < self.cooldown_end_sec
+            )
+            seen_ever = self.last_line_seen_sec is not None
+            debounce_passed = (
+                seen_ever
+                and (now - self.last_line_seen_sec) >= self.reverse_debounce
+            )
+            # Only reverse if we've actually seen a line at some point — don't back up at startup.
+            if seen_ever and debounce_passed and not in_cooldown:
+                self.reverse_start_sec = now
+                cmd.linear.x = -self.reverse_speed
+                self.publisher_.publish(cmd)
+                return
+
             self.publisher_.publish(cmd)
             return
 

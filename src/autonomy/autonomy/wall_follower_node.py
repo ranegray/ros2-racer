@@ -119,28 +119,28 @@ class WallFollowerNode(Node):
 
         cmd = Twist()
 
-        # Hard-left: front obstacle imminent
+        # Front obstacle — turn left (negative = left on this rover)
         if front_dist < FRONT_STOP_THRESH:
             cmd.linear.x = TURN_SPEED * 0.5
-            cmd.angular.z = HARD_STEER  # left
+            cmd.angular.z = -HARD_STEER
             self._cmd_pub.publish(cmd)
             self.get_logger().debug(f"FRONT OBSTACLE {front_dist:.2f} m — turning left")
             return
 
-        # Hard-right: right wall disappeared (open corner to the right)
+        # Right wall gone (open corner) — turn right (positive = right on this rover)
         if right_dist > WALL_GONE_THRESH:
             cmd.linear.x = TURN_SPEED
-            cmd.angular.z = -HARD_STEER  # right
+            cmd.angular.z = HARD_STEER
             self._cmd_pub.publish(cmd)
             self.get_logger().debug(f"RIGHT WALL GONE {right_dist:.2f} m — turning right")
             return
 
         # PD wall follow
+        # error > 0 = too far from wall = steer right (positive angular.z on this rover)
         error = right_dist - TARGET_DIST
         d_error = (error - self._prev_error) / dt
         self._prev_error = error
 
-        # Positive steer = angular.z > 0 = left turn = closing gap to right wall
         steer = KP * error + KD * d_error
         steer = max(-MAX_STEER, min(MAX_STEER, steer))
 

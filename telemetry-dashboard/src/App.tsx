@@ -42,11 +42,14 @@ function App() {
   const [disableCamera] = useState(() => hasFlag('nocam'))
   const [disableScan] = useState(() => hasFlag('noscan'))
   const [disableTelemetry] = useState(() => hasFlag('notel'))
+  const [disableLineDebug] = useState(() => hasFlag('nolinedbg'))
   const [connected, setConnected] = useState(false)
   const [latest, setLatest] = useState<RacerTelemetry | null>(null)
   const [samples, setSamples] = useState<Sample[]>([])
   const [imageArrivedAt, setImageArrivedAt] = useState(0)
   const [imageFormat, setImageFormat] = useState<string | null>(null)
+  const [lineDebugArrivedAt, setLineDebugArrivedAt] = useState(0)
+  const [lineDebugFormat, setLineDebugFormat] = useState<string | null>(null)
   const [scan, setScan] = useState<LaserScan | null>(null)
   const [scanArrivedAt, setScanArrivedAt] = useState(0)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
@@ -58,6 +61,7 @@ function App() {
   // across renders). CameraPanel registers a paint fn here on mount and we
   // call it synchronously from the subscribe callback.
   const cameraPaintRef = useRef<((raw: CompressedImage) => void) | null>(null)
+  const lineDebugPaintRef = useRef<((raw: CompressedImage) => void) | null>(null)
 
   useEffect(() => {
     const ros = new ROSLIB.Ros({ url: rosUrl })
@@ -120,6 +124,23 @@ function App() {
       setImageFormat((prev) => (prev === msg.format ? prev : msg.format))
     })
 
+    const lineDebugTopic = disableLineDebug
+      ? null
+      : new ROSLIB.Topic({
+          ros,
+          name: '/telemetry/line_debug',
+          messageType: 'sensor_msgs/msg/CompressedImage',
+          compression: 'cbor',
+          queue_length: 1,
+          throttle_rate: 0,
+        })
+    lineDebugTopic?.subscribe((raw) => {
+      const msg = raw as unknown as CompressedImage
+      lineDebugPaintRef.current?.(msg)
+      setLineDebugArrivedAt(Date.now())
+      setLineDebugFormat((prev) => (prev === msg.format ? prev : msg.format))
+    })
+
     const scanTopic = disableScan
       ? null
       : new ROSLIB.Topic({
@@ -140,10 +161,11 @@ function App() {
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       telemetryTopic?.unsubscribe()
       cameraTopic?.unsubscribe()
+      lineDebugTopic?.unsubscribe()
       scanTopic?.unsubscribe()
       ros.close()
     }
-  }, [rosUrl, disableCamera, disableScan, disableTelemetry])
+  }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 500)
@@ -177,6 +199,12 @@ function App() {
 
       <div className="dashboard-grid">
         <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />
+        <CameraPanel
+          title="Line Debug"
+          paintRef={lineDebugPaintRef}
+          format={lineDebugFormat}
+          arrivedAt={lineDebugArrivedAt}
+        />
         <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
         <Charts samples={samples} />
       </div>

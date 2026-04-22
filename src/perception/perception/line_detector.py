@@ -55,7 +55,8 @@ class LineDetectorNode(Node):
         self._setup_publishers()
 
         self.frame_count = 0
-        self.debug_interval = 30
+        self.debug_interval = 1
+        self.debug_log_interval = 30
 
     def _setup_publishers(self):
         self.follow_point_pub = self.create_publisher(PointStamped, "line_follow_point", 10)
@@ -161,10 +162,11 @@ class LineDetectorNode(Node):
         debug_msg.step = debug_msg.width * 3
         debug_msg.data = debug.tobytes()
         self.debug_img_pub.publish(debug_msg)
-        self.get_logger().info(
-            f"Debug image published (frame {self.frame_count}, "
-            f"px={int(mask.sum())}, follow={follow_c}, turn={turn_c})"
-        )
+        if self.frame_count % self.debug_log_interval == 0:
+            self.get_logger().info(
+                f"Debug image published (frame {self.frame_count}, "
+                f"px={int(mask.sum())}, follow={follow_c}, turn={turn_c})"
+            )
 
     def _overlay_band(self, debug, band, mask, box_color):
         y0, y1, x0, x1 = band

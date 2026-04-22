@@ -10,6 +10,7 @@ type Props = {
   /** wall-clock ms when the latest frame arrived (Date.now()) */
   arrivedAt: number
   stalenessMs?: number
+  title?: string
 }
 
 function mimeFor(format: string | undefined): string {
@@ -31,6 +32,7 @@ export const CameraPanel = memo(function CameraPanel({
   format,
   arrivedAt,
   stalenessMs = 1000,
+  title = 'Camera',
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const hasFrameRef = useRef(false)
@@ -93,7 +95,7 @@ export const CameraPanel = memo(function CameraPanel({
   return (
     <section className="panel camera-panel">
       <div className="panel-header">
-        <h2>Camera</h2>
+        <h2>{title}</h2>
         <span className={`badge ${stale ? 'badge-stale' : 'badge-live'}`}>
           {hasFrame ? `${format?.split(';')[0] || 'jpeg'} · ${age}s ago` : 'no frames'}
         </span>

@@ -6,15 +6,17 @@ Aggregates high-frequency ROS topics for the React dashboard.
 Two publishers, intentionally decoupled so a heavy payload can't backpressure
 the scalar stream:
 
-  /telemetry/racer  → racer_msgs/RacerTelemetry    (status + IMU + scalars, 10 Hz)
-  /telemetry/camera → sensor_msgs/CompressedImage  (JPEG camera frames,      5 Hz)
+  /telemetry/racer      → racer_msgs/RacerTelemetry    (status + IMU + scalars, 10 Hz)
+  /telemetry/camera     → sensor_msgs/CompressedImage  (JPEG camera frames,     30 Hz)
+  /telemetry/line_debug → sensor_msgs/CompressedImage  (JPEG debug overlay,     30 Hz)
 
 Subscriptions (all stored as latest-value cache):
-  imu/gyro                    → geometry_msgs/Vector3
-  imu/accel                   → geometry_msgs/Vector3
-  rover/armed                 → std_msgs/Bool
-  /perception/front_distance  → std_msgs/Float32
-  /camera/color/image_raw     → sensor_msgs/Image   (converted → CompressedImage)
+  imu/gyro                         → geometry_msgs/Vector3
+  imu/accel                        → geometry_msgs/Vector3
+  rover/armed                      → std_msgs/Bool
+  /perception/front_distance       → std_msgs/Float32
+  /camera/color/image_raw          → sensor_msgs/Image   (converted → CompressedImage)
+  /line_detector/debug_image       → sensor_msgs/Image   (converted → CompressedImage)
 
 Optional future subscriptions (already wired, just need a publisher):
   /telemetry/heading_error    → std_msgs/Float32
@@ -70,6 +72,7 @@ class TelemetryNode(Node):
         # frame. A single-threaded rclpy executor gets monopolized otherwise
         # and delays the 5 Hz timer, producing burst-then-stall on the wire.
         self._latest_image: Image | None = None
+        self._latest_line_debug: Image | None = None
 
         # ── subscriptions ─────────────────────────────────────────────────────
         self.create_subscription(Vector3, 'imu/gyro',
@@ -82,6 +85,8 @@ class TelemetryNode(Node):
                                  self._cb_front_distance, 10)
         self.create_subscription(Image, '/camera/color/image_raw',
                                  self._cb_image, 10)
+        self.create_subscription(Image, '/line_detector/debug_image',
+                                 self._cb_line_debug, 1)
 
         # Optional topics — populated by other nodes when available
         self.create_subscription(Float32, '/telemetry/heading_error',
@@ -105,14 +110,19 @@ class TelemetryNode(Node):
         self._cam_pub = self.create_publisher(
             CompressedImage, '/telemetry/camera', camera_qos
         )
+        self._line_debug_pub = self.create_publisher(
+            CompressedImage, '/telemetry/line_debug', camera_qos
+        )
 
         # ── publish timers ────────────────────────────────────────────────────
         self.create_timer(1.0 / rate, self._publish)
         self.create_timer(1.0 / camera_rate, self._publish_camera)
+        self.create_timer(1.0 / camera_rate, self._publish_line_debug)
 
         self.get_logger().info(
             f'TelemetryNode started — scalars @ {rate} Hz on /telemetry/racer, '
-            f'camera @ {camera_rate} Hz on /telemetry/camera'
+            f'camera @ {camera_rate} Hz on /telemetry/camera, '
+            f'line debug @ {camera_rate} Hz on /telemetry/line_debug'
         )
 
     # ── callbacks ─────────────────────────────────────────────────────────────
@@ -132,6 +142,9 @@ class TelemetryNode(Node):
     def _cb_image(self, msg: Image):
         """Latest-value cache only. JPEG encoding happens in the publish timer."""
         self._latest_image = msg
+
+    def _cb_line_debug(self, msg: Image):
+        self._latest_line_debug = msg
 
     def _cb_heading_error(self, msg: Float32):
         self._heading_error = msg.data
@@ -163,7 +176,14 @@ class TelemetryNode(Node):
         self._pub.publish(msg)
 
     def _publish_camera(self):
-        img = self._latest_image
+        self._encode_and_publish(self._latest_image, self._cam_pub, 'camera')
+
+    def _publish_line_debug(self):
+        self._encode_and_publish(
+            self._latest_line_debug, self._line_debug_pub, 'line_debug'
+        )
+
+    def _encode_and_publish(self, img: Image | None, publisher, label: str):
         if img is None:
             return
         try:
@@ -176,9 +196,11 @@ class TelemetryNode(Node):
             compressed.header = img.header
             compressed.format = 'jpeg'
             compressed.data = buf.tobytes()
-            self._cam_pub.publish(compressed)
+            publisher.publish(compressed)
         except Exception as e:
-            self.get_logger().warn(f'Image encode failed: {e}', throttle_duration_sec=5.0)
+            self.get_logger().warn(
+                f'{label} encode failed: {e}', throttle_duration_sec=5.0
+            )
 
 
 def main(args=None):

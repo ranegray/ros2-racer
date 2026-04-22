@@ -135,9 +135,13 @@ class LineControlNode(Node):
             self.publisher_.publish(cmd)
             return
 
-        cmd.angular.z = max(-1.0, min(1.0, steer + self.steering_trim))
+        # rover_node accepts angular.z in [-2.0, 2.0]; clamping tighter leaves steering on the table.
+        max_angular = 2.0
+        cmd.angular.z = max(-max_angular, min(max_angular, steer + self.steering_trim))
+        # Normalize steering magnitude to [0,1] for the speed scaler so tuning semantics stay the same.
+        steer_frac = abs(cmd.angular.z) / max_angular
         cmd.linear.x = max(
-            self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale)
+            self.min_speed, speed * (1.0 - steer_frac * self.speed_scale)
         )
         self.publisher_.publish(cmd)
         self.get_logger().debug(

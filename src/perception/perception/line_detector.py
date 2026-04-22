@@ -1,31 +1,10 @@
-import rclpy
-from rclpy.node import Node
+import cv2
 import numpy as np
-from scipy import ndimage
+import rclpy
 from geometry_msgs.msg import PointStamped
+from rclpy.node import Node
+from scipy import ndimage
 from sensor_msgs.msg import Image
-
-
-def draw_rectangle(img, x0, y0, x1, y1, color, thickness=2):
-    t = thickness
-    img[y0:y0 + t, x0:x1] = color
-    img[y1 - t:y1, x0:x1] = color
-    img[y0:y1, x0:x0 + t] = color
-    img[y0:y1, x1 - t:x1] = color
-
-
-def draw_filled_circle(img, cx, cy, radius, color):
-    h, w = img.shape[:2]
-    y0 = max(0, cy - radius)
-    y1 = min(h, cy + radius + 1)
-    x0 = max(0, cx - radius)
-    x1 = min(w, cx + radius + 1)
-    if y1 <= y0 or x1 <= x0:
-        return
-    ys = np.arange(y0, y1)[:, None]
-    xs = np.arange(x0, x1)[None, :]
-    mask = (xs - cx) ** 2 + (ys - cy) ** 2 <= radius ** 2
-    img[y0:y1, x0:x1][mask] = color
 
 
 class LineDetectorNode(Node):
@@ -73,14 +52,14 @@ class LineDetectorNode(Node):
             msg.height, msg.width, 3
         )
 
-        mask, follow_centroid, turn_target = self._detect(image)
+        det = self._detect(image)
 
-        self._publish_point(self.follow_point_pub, follow_centroid, msg.header)
-        self._publish_point(self.turn_point_pub, turn_target, msg.header)
+        self._publish_point(self.follow_point_pub, det["follow_centroid"], msg.header)
+        self._publish_point(self.turn_point_pub, det["turn_target"], msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:
-            self._publish_debug_image(image, mask, follow_centroid, turn_target, msg.header)
+            self._publish_debug_image(image, det, msg.header)
 
     def _detect(self, image):
         """RGB threshold → largest connected blob → centroid.
@@ -106,54 +85,66 @@ class LineDetectorNode(Node):
             ((b - g) >= self.bg_margin)
         )
 
-        # All detected pixels (used for right-turn check)
+        det = {
+            "mask": mask,
+            "largest_blob_mask": None,
+            "num_blobs": 0,
+            "largest_blob_size": 0,
+            "total_mask_pixels": int(mask.sum()),
+            "follow_centroid": None,
+            "turn_target": None,
+            "right_pixel_count": 0,
+            "rejected_small_blob": False,
+        }
+
         all_ys, all_xs = np.where(mask)
         if len(all_xs) == 0:
-            return mask, None, None
+            return det
 
         all_xs_abs = all_xs + x0
         all_ys_abs = all_ys + y0
 
         # --- Largest blob → follow centroid ---
         labeled, num_features = ndimage.label(mask)
+        det["num_blobs"] = int(num_features)
         if num_features == 0:
-            return mask, None, None
+            return det
 
         sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
         largest_label = int(np.argmax(sizes)) + 1
-        if sizes[largest_label - 1] < self.min_blob_pixels:
-            return mask, None, None
+        largest_size = int(sizes[largest_label - 1])
+        det["largest_blob_size"] = largest_size
+        det["largest_blob_mask"] = (labeled == largest_label)
 
-        blob_ys, blob_xs = np.where(labeled == largest_label)
-        blob_xs_abs = blob_xs + x0
-        blob_ys_abs = blob_ys + y0
-        follow_centroid = (int(np.mean(blob_xs_abs)), int(np.mean(blob_ys_abs)))
-
-        # --- 90° right-turn override ---
+        # --- 90° right-turn override (computed even if blob too small) ---
         right_mask = all_xs_abs > self.turn_right_threshold_x
-        turn_target = None
-        if int(right_mask.sum()) >= self.turn_right_pixel_min:
-            turn_target = (
+        right_count = int(right_mask.sum())
+        det["right_pixel_count"] = right_count
+        if right_count >= self.turn_right_pixel_min:
+            det["turn_target"] = (
                 int(np.mean(all_xs_abs[right_mask])),
                 int(np.mean(all_ys_abs[right_mask])),
             )
 
-        return mask, follow_centroid, turn_target
+        if largest_size < self.min_blob_pixels:
+            det["rejected_small_blob"] = True
+            return det
 
-    def _publish_debug_image(self, image, mask, follow_c, turn_c, header):
+        blob_ys, blob_xs = np.where(labeled == largest_label)
+        det["follow_centroid"] = (
+            int(np.mean(blob_xs + x0)),
+            int(np.mean(blob_ys + y0)),
+        )
+
+        return det
+
+    def _publish_debug_image(self, image, det, header):
         debug = image.copy()
 
-        self._overlay_band(debug, self.band, mask, box_color=(255, 255, 0))
-
-        y0, y1, _x0, _x1 = self.band
-        if turn_c is not None:
-            tx = self.turn_right_threshold_x
-            draw_rectangle(debug, tx, y0, tx + 2, y1, (255, 0, 255), thickness=2)
-
-        if follow_c is not None:
-            draw_filled_circle(debug, follow_c[0], follow_c[1], 10, (0, 0, 255))
-        if turn_c is not None:
-            draw_filled_circle(debug, turn_c[0], turn_c[1], 10, (255, 0, 255))
+        self._overlay_band(debug, self.band, det["mask"], det["largest_blob_mask"])
+        self._draw_turn_threshold(debug, det["turn_target"] is not None)
+        self._draw_centroids(debug, det["follow_centroid"], det["turn_target"])
+        self._draw_hud(debug, det)
 
         debug_msg = Image()
         debug_msg.header = header
@@ -165,17 +156,98 @@ class LineDetectorNode(Node):
         if self.frame_count % self.debug_log_interval == 0:
             self.get_logger().info(
                 f"Debug image published (frame {self.frame_count}, "
-                f"px={int(mask.sum())}, follow={follow_c}, turn={turn_c})"
+                f"px={det['total_mask_pixels']}, blobs={det['num_blobs']}, "
+                f"largest={det['largest_blob_size']}, "
+                f"follow={det['follow_centroid']}, turn={det['turn_target']})"
             )
 
-    def _overlay_band(self, debug, band, mask, box_color):
+    def _overlay_band(self, debug, band, mask, largest_blob_mask):
         y0, y1, x0, x1 = band
-        draw_rectangle(debug, x0, y0, x1, y1, box_color, thickness=2)
+        cv2.rectangle(debug, (x0, y0), (x1 - 1, y1 - 1), (255, 255, 0), 2)
+
         region = debug[y0:y1, x0:x1].astype(np.float32)
-        overlay = np.zeros_like(region)
-        overlay[..., 1] = mask.astype(np.float32) * 255.0
-        blended = region * 0.7 + overlay * 0.3
-        debug[y0:y1, x0:x1] = np.clip(blended, 0, 255).astype(np.uint8)
+
+        # Green tint for every masked pixel — shows the raw threshold result.
+        green = np.zeros_like(region)
+        green[..., 1] = mask.astype(np.float32) * 255.0
+        region = region * 0.6 + green * 0.4
+
+        # Yellow tint for the largest blob — shows which component was picked
+        # as the follow target. Layered on top so noise pixels stay green.
+        if largest_blob_mask is not None:
+            yellow = np.zeros_like(region)
+            yellow[..., 1] = largest_blob_mask.astype(np.float32) * 255.0
+            yellow[..., 2] = largest_blob_mask.astype(np.float32) * 255.0
+            region = np.where(
+                largest_blob_mask[..., None],
+                region * 0.4 + yellow * 0.6,
+                region,
+            )
+
+        debug[y0:y1, x0:x1] = np.clip(region, 0, 255).astype(np.uint8)
+
+    def _draw_turn_threshold(self, debug, active):
+        y0, y1, _x0, _x1 = self.band
+        tx = self.turn_right_threshold_x
+        color = (255, 0, 255) if active else (120, 0, 120)
+        thickness = 2 if active else 1
+        cv2.line(debug, (tx, y0), (tx, y1 - 1), color, thickness)
+
+    def _draw_centroids(self, debug, follow_c, turn_c):
+        if follow_c is not None:
+            cv2.circle(debug, follow_c, 12, (255, 255, 255), 2)
+            cv2.circle(debug, follow_c, 8, (0, 0, 255), -1)
+        if turn_c is not None:
+            cv2.circle(debug, turn_c, 12, (255, 255, 255), 2)
+            cv2.circle(debug, turn_c, 8, (255, 0, 255), -1)
+
+    def _draw_hud(self, debug, det):
+        if det["turn_target"] is not None:
+            status, status_color = "TURN", (255, 0, 255)
+        elif det["follow_centroid"] is not None:
+            status, status_color = "FOLLOW", (0, 255, 0)
+        elif det["rejected_small_blob"]:
+            status, status_color = "BLOB TOO SMALL", (0, 165, 255)
+        else:
+            status, status_color = "NO LINE", (0, 0, 255)
+
+        h, w = debug.shape[:2]
+
+        self._text(debug, status, (w - 10, 30), status_color,
+                   scale=0.9, thickness=2, align_right=True)
+
+        lines = [
+            f"frame {self.frame_count}",
+            f"mask px: {det['total_mask_pixels']}",
+            f"blobs: {det['num_blobs']}  largest: {det['largest_blob_size']}"
+            f" / min {self.min_blob_pixels}",
+            f"follow: {self._fmt_pt(det['follow_centroid'])}",
+            f"turn: {self._fmt_pt(det['turn_target'])}"
+            f"  right px: {det['right_pixel_count']}"
+            f" / min {self.turn_right_pixel_min}",
+            f"thresh: b>={self.b_min}  b-r>={self.br_margin}"
+            f"  b-g>={self.bg_margin}",
+        ]
+        y = 22
+        for line in lines:
+            self._text(debug, line, (10, y), (255, 255, 255),
+                       scale=0.5, thickness=1)
+            y += 18
+
+    @staticmethod
+    def _text(img, text, org, color, scale=0.5, thickness=1, align_right=False):
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        if align_right:
+            (tw, _), _ = cv2.getTextSize(text, font, scale, thickness)
+            org = (org[0] - tw, org[1])
+        # Black shadow for legibility over any background.
+        cv2.putText(img, text, org, font, scale, (0, 0, 0), thickness + 2,
+                    cv2.LINE_AA)
+        cv2.putText(img, text, org, font, scale, color, thickness, cv2.LINE_AA)
+
+    @staticmethod
+    def _fmt_pt(pt):
+        return f"({pt[0]},{pt[1]})" if pt is not None else "—"
 
     def _publish_point(self, publisher, centroid, header):
         point_msg = PointStamped()

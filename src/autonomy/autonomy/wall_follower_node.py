@@ -67,6 +67,7 @@ class WallFollowerNode(Node):
 
         self._prev_error = 0.0
         self._last_scan_t = None
+        self._wall_gone_count = 0  # consecutive scans with right wall absent
 
         self._right_idx: list[int] = []
         self._front_idx: list[int] = []
@@ -127,12 +128,18 @@ class WallFollowerNode(Node):
             self.get_logger().debug(f"FRONT OBSTACLE {front_dist:.2f} m — turning left")
             return
 
-        # Right wall gone (open corner) — turn right (positive = right on this rover)
+        # Right wall gone — only commit to hard right after 5 consecutive scans
+        # (filters out windows and doorways which cause a brief spike)
         if right_dist > WALL_GONE_THRESH:
+            self._wall_gone_count += 1
+        else:
+            self._wall_gone_count = 0
+
+        if self._wall_gone_count >= 5:
             cmd.linear.x = TURN_SPEED
             cmd.angular.z = HARD_STEER
             self._cmd_pub.publish(cmd)
-            self.get_logger().debug(f"RIGHT WALL GONE {right_dist:.2f} m — turning right")
+            self.get_logger().debug(f"RIGHT WALL GONE {right_dist:.2f} m ({self._wall_gone_count} scans) — turning right")
             return
 
         # PD wall follow

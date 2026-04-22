@@ -44,8 +44,9 @@ class LineControlNode(Node):
         # Recovery when the line is lost:
         #   Phase 1 — hard steer in the last known direction for lost_steer_duration
         #   Phase 2 — reverse for up to reverse_duration_cap, then cooldown/stop
-        self.lost_steer_duration = 1.0   # s to steer hard before reversing
+        self.lost_steer_duration = 2.0   # s to steer hard before reversing
         self.reverse_speed = 0.22        # m/s (published as negative linear.x)
+        self.reverse_angular = 4.0       # angular.z during reverse (can exceed normal max)
         self.reverse_duration_cap = 1.0  # max time to spend reversing before giving up
         self.reverse_cooldown = 0.5      # s to hold still after reversing
         self.last_line_seen_sec = None
@@ -78,7 +79,7 @@ class LineControlNode(Node):
     def control_loop(self):
         cmd = Twist()
         now = self._now_sec()
-        max_angular = 2.0
+        max_angular = 4.0
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
@@ -122,7 +123,7 @@ class LineControlNode(Node):
                     self.publisher_.publish(cmd)
                     return
                 cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = -max_angular if self.last_known_offset >= 0 else max_angular
+                cmd.angular.z = -self.reverse_angular if self.last_known_offset >= 0 else self.reverse_angular
                 self.publisher_.publish(cmd)
                 return
 

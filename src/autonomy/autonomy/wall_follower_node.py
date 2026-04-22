@@ -2,167 +2,365 @@
 """
 wall_follower_node.py
 
-Dual-wall centering controller.
+Hybrid F1TENTH look-ahead + dual-wall controller for Lap 1.
 
-  Both walls present  → PD to stay equidistant from left and right wall
-  Only right wall gone → go straight, no reaction
-  Only left wall gone  → go straight, no reaction
-  Both walls gone      → turn right (genuine open corner)
+Right wall: F1TENTH two-ray estimator (rays at -45° and -90°) gives
+            projected distance D_ahead and heading angle alpha.
+            A spike detector filters doorway glitches from real corners.
+            Sticky recovery requires N consecutive valid scans to exit
+            lost mode so a brief valid scan mid-corner doesn't abort the turn.
 
-This naturally ignores entranceways/windows on the right: the left wall
-stays present so no corner turn is triggered.
+Left wall:  Simple ±20° cone average. Acts as a balance correction when
+            present, and as a guard: right gone + left present = entranceway
+            (go straight), right gone + left gone = real corner (turn right).
+
+Four modes:
+  Both walls present   → F1TENTH PD + α-feedback + left-wall balance
+  Only left wall gone  → Pure F1TENTH right-wall following
+  Only right wall gone → Go straight; nudge away from left if too close
+  Both walls gone      → Coast straight (COAST_S), then timed right turn
 """
 
 import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import (
+    QoSProfile,
+    ReliabilityPolicy,
+    DurabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3
 
 
 # --- Tunable constants -------------------------------------------
-WALL_GONE_THRESH  = 1.8   # m — wall considered absent above this
-BOTH_GONE_SCANS   = 5     # consecutive scans with BOTH walls gone before turning right
-FRONT_SLOW_THRESH = 0.8   # m — start slowing
-FRONT_STOP_THRESH = 0.45  # m — hard left turn
-RIGHT_CONE_DEG    = 20    # ± degrees around -90° for right-wall rays
-LEFT_CONE_DEG     = 20    # ± degrees around +90° for left-wall rays
-FRONT_CONE_DEG    = 40    # ± degrees around 0° for front rays
+# Right-wall F1TENTH estimator
+RAY_A_DEG           = -45.0  # forward-right diagonal ray (degrees)
+RAY_B_DEG           = -90.0  # perpendicular-right ray (degrees)
+RAY_HALF_WIN_DEG    =   3.0  # cone half-width per ray (degrees)
+LOOK_AHEAD          =   0.5  # m — lookahead for D_ahead projection
+TARGET_DIST         =   0.8  # m — desired distance from right wall
+MAX_PLAUSIBLE       =   3.5  # m — beyond this = right wall gone
 
-KP = 1.2
-KD = 0.4
+# Spike detector (doorways cause brief spikes; corners cause sustained loss)
+MAX_D_JUMP          =   0.8  # m — max D_ahead change per scan
+MAX_ALPHA_JUMP_DEG  =  60.0  # degrees — max alpha change per scan
+SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 
-BASE_SPEED  = 0.40
-TURN_SPEED  = 0.28
-HARD_STEER  = 1.6
-MAX_STEER   = 2.0
+# Sticky recovery: require N consecutive valid scans to exit lost mode
+LOST_RECOVERY_SCANS =     3
+
+# Corner handling (both walls gone)
+COAST_S             =   0.3  # s — coast straight before committing
+COMMIT_TURN_S       =   2.0  # s — duration of full-lock right turn
+
+# Left wall
+LEFT_CONE_DEG       =    20  # ± degrees around +90° for left-wall rays
+WALL_GONE_THRESH    =   1.8  # m — left wall absent above this
+WALL_SAFE_DIST      =   1.0  # m — nudge away if remaining wall closer than this
+BALANCE_KP          =   0.3  # left-wall balance correction gain
+
+# Front safety
+FRONT_CONE_DEG      =    40  # ± degrees around 0° for front rays
+FRONT_SLOW_THRESH   =   0.8  # m — start slowing
+FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn
+
+# PD + feedback gains
+KP            = 0.8
+KD            = 0.15
+K_ALPHA       = 3.5   # wall-angle (alpha) feedback gain
+K_YAW         = 0.15  # IMU yaw-rate damping gain
+D_ERR_ALPHA   = 0.5   # exponential smoothing on derivative (1=raw, 0=frozen)
+MAX_ERROR     = 0.4   # clip distance error before PD
+
+# Output
+# SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
+# (positive angular.z = RIGHT on this rover, opposite REP-103)
+SIGN          = -1.0
+MAX_STEER     =  2.0  # ±2.0 = full servo lock
+BASE_SPEED    =  0.40  # m/s nominal
+TURN_SPEED    =  0.28  # m/s minimum (wall-lost / corners)
+SPEED_ALPHA_SCALE_DEG = 45.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
-
-
-def _cone_indices(angle_min, angle_increment, n_rays, center_deg, half_deg):
-    center_rad = math.radians(center_deg)
-    lo = center_rad - math.radians(half_deg)
-    hi = center_rad + math.radians(half_deg)
-    return [
-        i for i in range(n_rays)
-        if lo <= angle_min + i * angle_increment <= hi
-    ]
 
 
 class WallFollowerNode(Node):
     def __init__(self):
         super().__init__("wall_follower_node")
 
-        self._prev_error = 0.0
-        self._last_scan_t = None
-        self._both_gone_count = 0
+        # PD state
+        self._prev_error   = 0.0
+        self._prev_d_error = 0.0
+        self._prev_time    = None
 
-        self._right_idx = []
-        self._left_idx = []
-        self._front_idx = []
-        self._idx_computed = False
+        # Spike detector state
+        self._last_valid_D     = None
+        self._last_valid_alpha = None
+        self._last_valid_time  = None
+
+        # Right-wall sticky-recovery state
+        self._right_lost_since = None  # seconds when right wall first went absent
+        self._valid_run        = 0     # consecutive valid scans since last loss
+
+        # Both-walls-gone corner state machine
+        self._both_lost_since  = None  # seconds when both walls first gone
+
+        # IMU yaw rate (rad/s)
+        self._yaw_rate = 0.0
+
+        # Cone index caches (built on first scan)
+        self._left_idx   = []
+        self._front_idx  = []
+        self._idx_cached = False
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
-        self.create_subscription(LaserScan, "/scan", self._scan_cb, 10)
 
-        self.get_logger().info("Dual-wall follower started")
+        self.create_subscription(
+            LaserScan, "/scan", self._scan_cb, qos_profile_sensor_data
+        )
+        _sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+        self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _sensor_qos)
+
+        self.get_logger().info("Hybrid F1TENTH+dual-wall follower started")
+
+    # ------------------------------------------------------------------
+    # IMU callback
+    # ------------------------------------------------------------------
+
+    def _gyro_cb(self, msg: Vector3):
+        self._yaw_rate = msg.z
+
+    # ------------------------------------------------------------------
+    # Geometry helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _wrap(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    def _ray_at_angle(self, msg: LaserScan, target_deg: float, half_win_deg: float) -> float:
+        """Mean of valid rays within half_win_deg of target_deg. NaN if none."""
+        target = self._wrap(math.radians(target_deg))
+        half   = math.radians(half_win_deg)
+        readings = []
+        for i, r in enumerate(msg.ranges):
+            if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
+                continue
+            if abs(self._wrap(msg.angle_min + i * msg.angle_increment - target)) <= half:
+                readings.append(r)
+        return sum(readings) / len(readings) if readings else float("nan")
+
+    def _right_wall_state(self, msg: LaserScan):
+        """
+        F1TENTH two-ray look-ahead estimator.
+        Returns (D_ahead, alpha):
+          alpha   — heading angle relative to right wall (0 = parallel, <0 = yawed toward wall)
+          D_ahead — projected perpendicular distance LOOK_AHEAD metres ahead
+        Returns (nan, nan) when the perpendicular beam is missing.
+        """
+        a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)  # forward-right diagonal
+        b = self._ray_at_angle(msg, RAY_B_DEG,  RAY_HALF_WIN_DEG)  # perpendicular-right
+
+        if not math.isfinite(b):
+            return float("nan"), float("nan")
+        if not math.isfinite(a):
+            return b, 0.0  # perpendicular only: no angle, distance is b
+
+        theta   = abs(math.radians(RAY_B_DEG - RAY_A_DEG))
+        alpha   = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
+        D_now   = b * math.cos(alpha)
+        D_ahead = D_now + LOOK_AHEAD * math.sin(alpha)
+        return D_ahead, alpha
+
+    def _cone_indices(self, msg: LaserScan, center_deg: float, half_deg: float):
+        n = len(msg.ranges)
+        lo = math.radians(center_deg - half_deg)
+        hi = math.radians(center_deg + half_deg)
+        return [i for i in range(n) if lo <= msg.angle_min + i * msg.angle_increment <= hi]
+
+    # ------------------------------------------------------------------
+    # Main scan callback
+    # ------------------------------------------------------------------
 
     def _scan_cb(self, msg: LaserScan):
-        n = len(msg.ranges)
 
-        if not self._idx_computed:
-            self._right_idx = _cone_indices(msg.angle_min, msg.angle_increment, n, -90, RIGHT_CONE_DEG)
-            self._left_idx  = _cone_indices(msg.angle_min, msg.angle_increment, n,  90, LEFT_CONE_DEG)
-            self._front_idx = _cone_indices(msg.angle_min, msg.angle_increment, n,   0, FRONT_CONE_DEG)
-            self._idx_computed = True
+        # Build cone caches once
+        if not self._idx_cached:
+            self._left_idx  = self._cone_indices(msg,  90.0, LEFT_CONE_DEG)
+            self._front_idx = self._cone_indices(msg,   0.0, FRONT_CONE_DEG)
+            self._idx_cached = True
             self.get_logger().info(
-                f"Ray cones: right={len(self._right_idx)}, "
-                f"left={len(self._left_idx)}, front={len(self._front_idx)}"
+                f"Cone caches: left={len(self._left_idx)} front={len(self._front_idx)}"
             )
 
         ranges = np.array(msg.ranges, dtype=np.float32)
 
-        def valid_mean(idx):
-            vals = ranges[idx]
-            good = vals[(vals > msg.range_min) & (vals < msg.range_max) & np.isfinite(vals)]
-            return float(np.mean(good)) if len(good) > 0 else msg.range_max
+        def cone_mean(idx):
+            v = ranges[idx]
+            good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
+            return float(np.mean(good)) if len(good) else float(msg.range_max)
 
-        def valid_min(idx):
-            vals = ranges[idx]
-            good = vals[(vals > msg.range_min) & (vals < msg.range_max) & np.isfinite(vals)]
-            return float(np.min(good)) if len(good) > 0 else msg.range_max
+        def cone_min(idx):
+            v = ranges[idx]
+            good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
+            return float(np.min(good)) if len(good) else float(msg.range_max)
 
-        right_dist = valid_mean(self._right_idx)
-        left_dist  = valid_mean(self._left_idx)
-        front_dist = valid_min(self._front_idx)
+        now_s = self.get_clock().now().nanoseconds * 1e-9
 
-        now = self.get_clock().now()
-        dt = 0.1
-        if self._last_scan_t is not None:
-            dt = max(0.01, (now - self._last_scan_t).nanoseconds / 1e9)
-        self._last_scan_t = now
+        left_dist  = cone_mean(self._left_idx)
+        front_dist = cone_min(self._front_idx)
+        D_ahead, alpha = self._right_wall_state(msg)
 
-        cmd = Twist()
-
-        # Front obstacle — turn left
+        # --- Emergency stop (fires regardless of wall state) ---
         if front_dist < FRONT_STOP_THRESH:
-            cmd.linear.x = TURN_SPEED * 0.5
-            cmd.angular.z = HARD_STEER
+            cmd = Twist()
+            cmd.linear.x  = TURN_SPEED * 0.5
+            cmd.angular.z = -MAX_STEER   # hard LEFT (negative = left on this rover)
             self._cmd_pub.publish(cmd)
-            self.get_logger().info(f"FRONT {front_dist:.2f}m — hard left")
+            self.get_logger().info(f"EMERGENCY fwd={front_dist:.2f}m — hard left")
             return
 
-        right_gone = right_dist > WALL_GONE_THRESH
-        left_gone  = left_dist  > WALL_GONE_THRESH
+        # --- Spike detector ---
+        is_spike = False
+        if (
+            math.isfinite(D_ahead)
+            and self._last_valid_time is not None
+            and (now_s - self._last_valid_time) < SPIKE_STALE_S
+        ):
+            dD = abs(D_ahead - self._last_valid_D)
+            da = abs(math.degrees(alpha - self._last_valid_alpha))
+            if dD > MAX_D_JUMP or da > MAX_ALPHA_JUMP_DEG:
+                is_spike = True
+                self.get_logger().info(f"spike: ΔD={dD:.2f}m Δα={da:.1f}°")
 
-        # Both walls gone — genuine open corner, turn right
-        if right_gone and left_gone:
-            self._both_gone_count += 1
-            if self._both_gone_count >= BOTH_GONE_SCANS:
-                cmd.linear.x = TURN_SPEED
-                cmd.angular.z = -HARD_STEER
-                self._cmd_pub.publish(cmd)
-                self.get_logger().info(
-                    f"BOTH WALLS GONE ({self._both_gone_count} scans) — turning right"
-                )
-                return
-            # Haven't confirmed yet — go straight
-            cmd.linear.x = BASE_SPEED
-            self._cmd_pub.publish(cmd)
-            return
+        # Expire stale spike history
+        if (
+            self._last_valid_time is not None
+            and (now_s - self._last_valid_time) >= SPIKE_STALE_S
+        ):
+            self._last_valid_D = self._last_valid_alpha = self._last_valid_time = None
+
+        # --- Right-wall loss + sticky recovery ---
+        right_gone_now = (
+            not math.isfinite(D_ahead) or D_ahead > MAX_PLAUSIBLE or is_spike
+        )
+
+        if right_gone_now:
+            self._valid_run = 0
+            if self._right_lost_since is None:
+                self._right_lost_since = now_s
         else:
-            self._both_gone_count = 0
+            self._valid_run += 1
+            self._last_valid_D     = D_ahead
+            self._last_valid_alpha = alpha
+            self._last_valid_time  = now_s
 
-        # Only one wall gone — go straight, no correction
-        if right_gone or left_gone:
-            cmd.linear.x = BASE_SPEED
+        # Still "lost" until N consecutive valid scans confirm recovery
+        right_gone = right_gone_now or (
+            self._right_lost_since is not None
+            and self._valid_run < LOST_RECOVERY_SCANS
+        )
+        if not right_gone:
+            self._right_lost_since = None
+
+        left_gone = left_dist > WALL_GONE_THRESH
+
+        # ==============================================================
+        # CASE 1: Both walls gone → coast then timed right turn
+        # ==============================================================
+        if right_gone and left_gone:
+            if self._both_lost_since is None:
+                self._both_lost_since = now_s
+            lost_for = now_s - self._both_lost_since
+
+            self._prev_error = self._prev_d_error = 0.0
+            self._prev_time  = now_s
+
+            cmd = Twist()
+            cmd.linear.x = TURN_SPEED
+            if lost_for < COAST_S:
+                cmd.angular.z = 0.0
+                mode = "coast"
+            elif lost_for < COAST_S + COMMIT_TURN_S:
+                cmd.angular.z = MAX_STEER   # full-lock RIGHT (positive = right)
+                mode = "turn"
+            else:
+                cmd.angular.z = 0.0         # release; restarts next scan if still lost
+                self._both_lost_since = None
+                mode = "release"
+
             self._cmd_pub.publish(cmd)
             self.get_logger().info(
-                f"ONE WALL GONE  right={right_dist:.2f}  left={left_dist:.2f} — straight"
+                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
             )
             return
 
-        # Both walls present — center between them
-        # error > 0: right farther than left → too close to left → steer right (positive)
-        error = right_dist - left_dist
-        d_error = (error - self._prev_error) / dt
-        self._prev_error = error
+        self._both_lost_since = None  # at least one wall present
 
-        steer = KP * error + KD * d_error
-        steer = max(-MAX_STEER, min(MAX_STEER, steer))
+        # ==============================================================
+        # CASE 2: Only right wall gone → entranceway, go straight
+        # ==============================================================
+        if right_gone:
+            steer = 0.0
+            if left_dist < WALL_SAFE_DIST:
+                steer = KP * (WALL_SAFE_DIST - left_dist)
+                steer = min(steer, MAX_STEER)
+            cmd = Twist()
+            cmd.linear.x  = BASE_SPEED
+            cmd.angular.z = steer
+            self._cmd_pub.publish(cmd)
+            self.get_logger().info(
+                f"RIGHT GONE  left={left_dist:.2f}  steer={steer:.2f}"
+            )
+            return
 
-        speed = BASE_SPEED
+        # ==============================================================
+        # CASE 3/4: Right wall present → F1TENTH PD (+ balance if left present)
+        # ==============================================================
+        error = TARGET_DIST - D_ahead
+        error = max(-MAX_ERROR, min(MAX_ERROR, error))
+
+        if self._prev_time is None:
+            d_error = 0.0
+        else:
+            dt      = now_s - self._prev_time
+            raw_d   = (error - self._prev_error) / dt if dt > 0 else 0.0
+            d_error = D_ERR_ALPHA * raw_d + (1.0 - D_ERR_ALPHA) * self._prev_d_error
+        self._prev_error   = error
+        self._prev_d_error = d_error
+        self._prev_time    = now_s
+
+        # Pre-sign: PD + alpha-feedback + IMU yaw damping
+        pre_sign = KP * error + KD * d_error - K_ALPHA * alpha - K_YAW * self._yaw_rate
+
+        # Left-wall balance: when right is farther than left (drifted left), push right
+        if not left_gone:
+            pre_sign -= BALANCE_KP * (D_ahead - left_dist)
+
+        steering = SIGN * pre_sign
+        steering = max(-MAX_STEER, min(MAX_STEER, steering))
+
+        # Speed: ease off as wall angle grows; also slow for front obstacles
+        alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
+        speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
         if front_dist < FRONT_SLOW_THRESH:
-            speed *= front_dist / FRONT_SLOW_THRESH
+            speed = max(TURN_SPEED, speed * front_dist / FRONT_SLOW_THRESH)
 
-        cmd.linear.x = speed
-        cmd.angular.z = steer
+        cmd = Twist()
+        cmd.linear.x  = speed
+        cmd.angular.z = steering
         self._cmd_pub.publish(cmd)
 
+        tag = "F1TENTH+bal" if not left_gone else "F1TENTH"
         self.get_logger().info(
-            f"right={right_dist:.2f}  left={left_dist:.2f}  "
-            f"err={error:.2f}  steer={steer:.2f}"
+            f"{tag}  D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}°  "
+            f"left={left_dist:.2f}  err={error:+.2f}  steer={steering:+.2f}  v={speed:.2f}"
         )
 
 
@@ -175,7 +373,10 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

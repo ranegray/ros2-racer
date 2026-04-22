@@ -10,12 +10,16 @@ class LineControlNode(Node):
         super().__init__("line_control_node")
         self.latest_follow = None
         self.latest_turn = None
+        self.latest_lookahead = None
 
         self.follow_sub = self.create_subscription(
             PointStamped, "line_follow_point", self._follow_callback, 10
         )
         self.turn_sub = self.create_subscription(
             PointStamped, "line_turn_point", self._turn_callback, 10
+        )
+        self.lookahead_sub = self.create_subscription(
+            PointStamped, "line_lookahead_point", self._lookahead_callback, 10
         )
         self.publisher_ = self.create_publisher(Twist, "cmd_vel", 10)
 
@@ -62,6 +66,9 @@ class LineControlNode(Node):
     def _turn_callback(self, msg):
         self.latest_turn = msg
 
+    def _lookahead_callback(self, msg):
+        self.latest_lookahead = msg
+
     def _extract(self, msg):
         """Return (x, y) in pixels if msg is fresh and non-empty, else None."""
         if msg is None:
@@ -85,6 +92,7 @@ class LineControlNode(Node):
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
+        lookahead = self._extract(self.latest_lookahead)
 
         if follow is not None or turn is not None:
             self.last_line_seen_sec = now
@@ -158,8 +166,12 @@ class LineControlNode(Node):
         cmd.angular.z = max_angular * math.tanh((steer + self.steering_trim) / max_angular)
         # Normalize steering magnitude to [0,1] for the speed scaler so tuning semantics stay the same.
         steer_frac = abs(cmd.angular.z) / max_angular
-        # Also slow down when the offset is changing fast (bend detected early via D term).
-        curvature_frac = min(1.0, abs(d_offset) * self.curvature_speed_scale)
+        # Slow down based on geometric curvature: how far the lookahead x is from the follow x.
+        # This fires early — the lookahead sees the turn coming before the robot is in it.
+        if lookahead is not None and follow is not None:
+            curvature_frac = min(1.0, abs(lookahead[0] - follow[0]) / self.image_center_x * self.curvature_speed_scale)
+        else:
+            curvature_frac = min(1.0, abs(d_offset) * self.curvature_speed_scale)
         speed_reduction = max(steer_frac, curvature_frac)
         cmd.linear.x = max(
             self.min_speed, speed * (1.0 - speed_reduction * self.speed_scale)

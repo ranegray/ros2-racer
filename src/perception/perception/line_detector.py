@@ -21,6 +21,7 @@ class LineDetectorNode(Node):
         # rejected even when blue still dominates by the margins above.
         self.r_max = 120      # reject if red channel exceeds this
         self.g_max = 160      # reject if green channel exceeds this
+        self.b_max = 210      # reject specular reflections (too-bright blue)
         self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640
@@ -39,6 +40,7 @@ class LineDetectorNode(Node):
 
     def _setup_publishers(self):
         self.follow_point_pub = self.create_publisher(PointStamped, "line_follow_point", 10)
+        self.lookahead_point_pub = self.create_publisher(PointStamped, "line_lookahead_point", 10)
         self.debug_img_pub = self.create_publisher(Image, "line_detector/debug_image", 1)
 
     def _setup_subscribers(self):
@@ -54,6 +56,7 @@ class LineDetectorNode(Node):
         det = self._detect(image)
 
         self._publish_point(self.follow_point_pub, det["follow_centroid"], msg.header)
+        self._publish_point(self.lookahead_point_pub, det["lookahead_centroid"], msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:
@@ -76,6 +79,7 @@ class LineDetectorNode(Node):
 
         mask = (
             (b >= self.b_min) &
+            (b <= self.b_max) &
             ((b - r) >= self.br_margin) &
             ((b - g) >= self.bg_margin) &
             (r <= self.r_max) &
@@ -89,6 +93,7 @@ class LineDetectorNode(Node):
             "largest_blob_size": 0,
             "total_mask_pixels": int(mask.sum()),
             "follow_centroid": None,
+            "lookahead_centroid": None,
             "rejected_small_blob": False,
         }
 
@@ -111,10 +116,25 @@ class LineDetectorNode(Node):
             return det
 
         blob_ys, blob_xs = np.where(labeled == largest_label)
-        det["follow_centroid"] = (
-            int(np.mean(blob_xs + x0)),
-            int(np.mean(blob_ys + y0)),
-        )
+
+        # Near centroid: bottom half of band (close to robot)
+        band_height = y1 - y0
+        near_mask = blob_ys >= (band_height // 2)
+        if near_mask.any():
+            follow_x = int(np.mean(blob_xs[near_mask] + x0))
+            follow_y = int(np.mean(blob_ys[near_mask] + y0))
+        else:
+            follow_x = int(np.mean(blob_xs + x0))
+            follow_y = int(np.mean(blob_ys + y0))
+        det["follow_centroid"] = (follow_x, follow_y)
+
+        # Far centroid: top third of band (lookahead)
+        far_mask = blob_ys < (band_height // 3)
+        if far_mask.any() and far_mask.sum() >= 10:
+            det["lookahead_centroid"] = (
+                int(np.mean(blob_xs[far_mask] + x0)),
+                int(np.mean(blob_ys[far_mask] + y0)),
+            )
 
         return det
 

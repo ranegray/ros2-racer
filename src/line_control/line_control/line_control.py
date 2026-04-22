@@ -24,7 +24,7 @@ class LineControlNode(Node):
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.2  # proportional gain on follow-point offset
-        self.steering_kd = 8.0  # derivative gain on follow-point offset
+        self.steering_kd = 1.5  # derivative gain on follow-point offset
         self.turn_steering_kp = 3.5  # proportional gain on turn-point offset (override)
         self.base_speed = 0.55  # forward speed when following (m/s)
         self.turn_speed = 0.45  # forward speed when turning (m/s)
@@ -122,7 +122,7 @@ class LineControlNode(Node):
                     self.publisher_.publish(cmd)
                     return
                 cmd.linear.x = -self.reverse_speed
-                cmd.angular.z = max_angular if self.last_known_offset >= 0 else -max_angular
+                cmd.angular.z = -max_angular if self.last_known_offset >= 0 else max_angular
                 self.publisher_.publish(cmd)
                 return
 

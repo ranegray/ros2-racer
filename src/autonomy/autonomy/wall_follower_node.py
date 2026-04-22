@@ -35,7 +35,7 @@ TARGET_DIST      = 0.90   # m — desired distance from right wall
 WALL_GONE_THRESH = 3.0    # m — right wall considered gone above this (high to avoid doorway false triggers)
 FRONT_SLOW_THRESH = 0.8   # m — start slowing when front closer than this
 FRONT_STOP_THRESH = 0.45  # m — turn left hard when front closer than this
-RIGHT_CONE_DEG   = 20     # ± degrees around -90° for right-wall rays
+RIGHT_CONE_DEG   = 40     # ± degrees around -90° for right-wall rays
 FRONT_CONE_DEG   = 40     # ± degrees around 0° for front rays
 
 KP = 1.2           # proportional gain
@@ -135,7 +135,7 @@ class WallFollowerNode(Node):
         else:
             self._wall_gone_count = 0
 
-        if self._wall_gone_count >= 5:
+        if self._wall_gone_count >= 15:
             cmd.linear.x = TURN_SPEED
             cmd.angular.z = HARD_STEER
             self._cmd_pub.publish(cmd)

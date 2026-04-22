@@ -26,9 +26,9 @@ class LineControlNode(Node):
         self.steering_kp = 1.2  # proportional gain on follow-point offset
         self.steering_kd = 4.0  # derivative gain on follow-point offset
         self.turn_steering_kp = 3.5  # proportional gain on turn-point offset (override)
-        self.base_speed = 0.55  # forward speed when following (m/s)
-        self.turn_speed = 0.55  # forward speed when turning (m/s)
-        self.speed_scale = 1.1  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.base_speed = 0.40  # forward speed when following (m/s)
+        self.turn_speed = 0.40  # forward speed when turning (m/s)
+        self.speed_scale = 1.0  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
         self.min_speed = (
             0.30  # floor — motors must always get at least this much throttle
         )

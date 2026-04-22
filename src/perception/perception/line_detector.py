@@ -16,6 +16,11 @@ class LineDetectorNode(Node):
         self.b_min = 90       # minimum blue channel value
         self.br_margin = 30   # blue must exceed red by at least this
         self.bg_margin = 15   # blue must exceed green by at least this
+        # Ground reflections are bright-and-desaturated: G and R both climb past
+        # the tape's true values. Cap them so specular highlights / glare are
+        # rejected even when blue still dominates by the margins above.
+        self.r_max = 120      # reject if red channel exceeds this
+        self.g_max = 160      # reject if green channel exceeds this
         self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
         self.image_width = 640
@@ -71,7 +76,9 @@ class LineDetectorNode(Node):
         mask = (
             (b >= self.b_min) &
             ((b - r) >= self.br_margin) &
-            ((b - g) >= self.bg_margin)
+            ((b - g) >= self.bg_margin) &
+            (r <= self.r_max) &
+            (g <= self.g_max)
         )
 
         det = {
@@ -183,6 +190,7 @@ class LineDetectorNode(Node):
             f"follow: {self._fmt_pt(det['follow_centroid'])}",
             f"thresh: b>={self.b_min}  b-r>={self.br_margin}"
             f"  b-g>={self.bg_margin}",
+            f"  r<={self.r_max}  g<={self.g_max}",
         ]
         y = 22
         for line in lines:

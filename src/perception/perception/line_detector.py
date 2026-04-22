@@ -24,12 +24,6 @@ class LineDetectorNode(Node):
         # Detection band (y_start, y_end, x_start, x_end)
         self.band = (140, 380, 0, self.image_width)
 
-        # 90° right-turn detection: far-right pixel cluster = horizontal
-        # stroke of the L-marker. Checked across ALL detected pixels (not
-        # just the largest blob) so the stroke registers even if separated.
-        self.turn_right_threshold_x = 500
-        self.turn_right_pixel_min = 60
-
         self._setup_subscribers()
         self._setup_publishers()
 
@@ -39,7 +33,6 @@ class LineDetectorNode(Node):
 
     def _setup_publishers(self):
         self.follow_point_pub = self.create_publisher(PointStamped, "line_follow_point", 10)
-        self.turn_point_pub = self.create_publisher(PointStamped, "line_turn_point", 10)
         self.debug_img_pub = self.create_publisher(Image, "line_detector/debug_image", 1)
 
     def _setup_subscribers(self):
@@ -55,7 +48,6 @@ class LineDetectorNode(Node):
         det = self._detect(image)
 
         self._publish_point(self.follow_point_pub, det["follow_centroid"], msg.header)
-        self._publish_point(self.turn_point_pub, det["turn_target"], msg.header)
 
         self.frame_count += 1
         if self.frame_count % self.debug_interval == 0:
@@ -68,9 +60,6 @@ class LineDetectorNode(Node):
             Using the largest blob instead of all pixels rejects noise and
             false positives automatically — the contour-based approach from
             https://const-toporov.medium.com/line-following-robot-with-opencv-and-contour-based-approach-417b90f2c298
-        turn_target: centroid of far-right pixels when the right-turn
-            L-marker is visible. Checked on all detected pixels so the
-            horizontal stroke registers even if it forms a separate blob.
         """
         y0, y1, x0, x1 = self.band
         cropped = image[y0:y1, x0:x1]
@@ -92,19 +81,12 @@ class LineDetectorNode(Node):
             "largest_blob_size": 0,
             "total_mask_pixels": int(mask.sum()),
             "follow_centroid": None,
-            "turn_target": None,
-            "right_pixel_count": 0,
             "rejected_small_blob": False,
         }
 
-        all_ys, all_xs = np.where(mask)
-        if len(all_xs) == 0:
+        if not mask.any():
             return det
 
-        all_xs_abs = all_xs + x0
-        all_ys_abs = all_ys + y0
-
-        # --- Largest blob → follow centroid ---
         labeled, num_features = ndimage.label(mask)
         det["num_blobs"] = int(num_features)
         if num_features == 0:
@@ -115,16 +97,6 @@ class LineDetectorNode(Node):
         largest_size = int(sizes[largest_label - 1])
         det["largest_blob_size"] = largest_size
         det["largest_blob_mask"] = (labeled == largest_label)
-
-        # --- 90° right-turn override (computed even if blob too small) ---
-        right_mask = all_xs_abs > self.turn_right_threshold_x
-        right_count = int(right_mask.sum())
-        det["right_pixel_count"] = right_count
-        if right_count >= self.turn_right_pixel_min:
-            det["turn_target"] = (
-                int(np.mean(all_xs_abs[right_mask])),
-                int(np.mean(all_ys_abs[right_mask])),
-            )
 
         if largest_size < self.min_blob_pixels:
             det["rejected_small_blob"] = True
@@ -142,8 +114,7 @@ class LineDetectorNode(Node):
         debug = image.copy()
 
         self._overlay_band(debug, self.band, det["mask"], det["largest_blob_mask"])
-        self._draw_turn_threshold(debug, det["turn_target"] is not None)
-        self._draw_centroids(debug, det["follow_centroid"], det["turn_target"])
+        self._draw_centroids(debug, det["follow_centroid"])
         self._draw_hud(debug, det)
 
         debug_msg = Image()
@@ -158,7 +129,7 @@ class LineDetectorNode(Node):
                 f"Debug image published (frame {self.frame_count}, "
                 f"px={det['total_mask_pixels']}, blobs={det['num_blobs']}, "
                 f"largest={det['largest_blob_size']}, "
-                f"follow={det['follow_centroid']}, turn={det['turn_target']})"
+                f"follow={det['follow_centroid']})"
             )
 
     def _overlay_band(self, debug, band, mask, largest_blob_mask):
@@ -186,25 +157,13 @@ class LineDetectorNode(Node):
 
         debug[y0:y1, x0:x1] = np.clip(region, 0, 255).astype(np.uint8)
 
-    def _draw_turn_threshold(self, debug, active):
-        y0, y1, _x0, _x1 = self.band
-        tx = self.turn_right_threshold_x
-        color = (255, 0, 255) if active else (120, 0, 120)
-        thickness = 2 if active else 1
-        cv2.line(debug, (tx, y0), (tx, y1 - 1), color, thickness)
-
-    def _draw_centroids(self, debug, follow_c, turn_c):
+    def _draw_centroids(self, debug, follow_c):
         if follow_c is not None:
             cv2.circle(debug, follow_c, 12, (255, 255, 255), 2)
             cv2.circle(debug, follow_c, 8, (0, 0, 255), -1)
-        if turn_c is not None:
-            cv2.circle(debug, turn_c, 12, (255, 255, 255), 2)
-            cv2.circle(debug, turn_c, 8, (255, 0, 255), -1)
 
     def _draw_hud(self, debug, det):
-        if det["turn_target"] is not None:
-            status, status_color = "TURN", (255, 0, 255)
-        elif det["follow_centroid"] is not None:
+        if det["follow_centroid"] is not None:
             status, status_color = "FOLLOW", (0, 255, 0)
         elif det["rejected_small_blob"]:
             status, status_color = "BLOB TOO SMALL", (0, 165, 255)
@@ -222,9 +181,6 @@ class LineDetectorNode(Node):
             f"blobs: {det['num_blobs']}  largest: {det['largest_blob_size']}"
             f" / min {self.min_blob_pixels}",
             f"follow: {self._fmt_pt(det['follow_centroid'])}",
-            f"turn: {self._fmt_pt(det['turn_target'])}"
-            f"  right px: {det['right_pixel_count']}"
-            f" / min {self.turn_right_pixel_min}",
             f"thresh: b>={self.b_min}  b-r>={self.br_margin}"
             f"  b-g>={self.bg_margin}",
         ]

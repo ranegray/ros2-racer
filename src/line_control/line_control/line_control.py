@@ -30,7 +30,7 @@ class LineControlNode(Node):
         self.base_speed = 0.40  # forward speed when following (m/s)
         self.turn_speed = 0.35  # forward speed when turning (m/s)
         self.speed_scale = 1.0         # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
-        self.curvature_speed_scale = 0.4  # how much bend rate (d_offset) reduces speed; tune up to slow earlier
+        self.curvature_speed_scale = 1.5  # how much bend rate (d_offset) reduces speed; tune up to slow earlier
         self.min_speed = 0.35
         self.steering_trim = 0.12  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)

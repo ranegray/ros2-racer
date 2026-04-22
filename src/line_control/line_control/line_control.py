@@ -76,6 +76,7 @@ class LineControlNode(Node):
     def control_loop(self):
         cmd = Twist()
         now = self._now_sec()
+        max_angular = 2.0
 
         follow = self._extract(self.latest_follow)
         turn = self._extract(self.latest_turn)
@@ -145,7 +146,6 @@ class LineControlNode(Node):
             return
 
         # rover_node accepts angular.z in [-2.0, 2.0]; clamping tighter leaves steering on the table.
-        max_angular = 2.0
         cmd.angular.z = max(-max_angular, min(max_angular, steer + self.steering_trim))
         # Normalize steering magnitude to [0,1] for the speed scaler so tuning semantics stay the same.
         steer_frac = abs(cmd.angular.z) / max_angular

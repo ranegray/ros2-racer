@@ -23,21 +23,23 @@ class LineControlNode(Node):
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
         self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 2.2   # proportional gain on follow-point offset
-        self.steering_kd = 1.5   # derivative gain on follow-point offset
-        self.turn_steering_kp = (
-            3.5   # proportional gain on turn-point offset (override)
-        )
-        self.base_speed = 0.30  # forward speed when following (m/s)
-        self.turn_speed = 0.30  # forward speed when turning (m/s)
+        self.steering_kp = 1.3  # proportional gain on follow-point offset
+        self.steering_kd = 2.5  # derivative gain on follow-point offset
+        self.turn_steering_kp = 3.5  # proportional gain on turn-point offset (override)
+        self.base_speed = 0.33  # forward speed when following (m/s)
+        self.turn_speed = 0.33  # forward speed when turning (m/s)
         self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
-        self.min_speed = 0.22   # floor — motors must always get at least this much throttle
+        self.min_speed = (
+            0.30  # floor — motors must always get at least this much throttle
+        )
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
-        self.prev_offset = 0.0       # previous normalized offset for D term
-        self.dt = 0.1                # control loop period (s)
-        self.last_known_offset = 0.0 # sign of last seen offset; drives recovery steer when line is lost
+        self.prev_offset = 0.0  # previous normalized offset for D term
+        self.dt = 0.1  # control loop period (s)
+        self.last_known_offset = (
+            0.0  # sign of last seen offset; drives recovery steer when line is lost
+        )
 
         self.get_logger().info("Line Control Node has started!")
 
@@ -74,7 +76,9 @@ class LineControlNode(Node):
             offset = (turn[0] - self.target_x) / self.image_center_x
             steer = self.turn_steering_kp * offset
             speed = self.turn_speed
-            self.prev_offset = offset  # keep prev_offset current to avoid D spike on return to follow
+            self.prev_offset = (
+                offset  # keep prev_offset current to avoid D spike on return to follow
+            )
             self.last_known_offset = offset
         elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
@@ -89,7 +93,9 @@ class LineControlNode(Node):
             return
 
         cmd.angular.z = max(-1.0, min(1.0, steer + self.steering_trim))
-        cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
+        cmd.linear.x = max(
+            self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale)
+        )
         self.publisher_.publish(cmd)
         self.get_logger().debug(
             f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "

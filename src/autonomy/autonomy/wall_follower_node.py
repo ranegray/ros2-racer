@@ -80,6 +80,7 @@ class WallFollowerNode(Node):
         self._in_right_turn = False
         self._turn_accumulated = 0.0  # radians turned so far during hard right
         self._turn_start_t = None
+        self._scan_count = 0
 
         self._right_idx = []
         self._right_weights = np.array([])
@@ -212,6 +213,14 @@ class WallFollowerNode(Node):
         cmd.linear.x = speed
         cmd.angular.z = steer
         self._cmd_pub.publish(cmd)
+
+        self._scan_count += 1
+        if self._scan_count % 5 == 0:
+            self.get_logger().info(
+                f"right={right_dist:.2f}m  open_frac={open_frac:.2f}  "
+                f"wall_gone_cnt={self._wall_gone_count}  "
+                f"gyro_z={self._gyro_z:.2f}  steer={steer:.2f}"
+            )
 
         self.get_logger().debug(
             f"right={right_dist:.2f} front={front_dist:.2f} "

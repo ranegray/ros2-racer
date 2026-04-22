@@ -5,7 +5,8 @@ PD wall-following controller. Subscribes to /scan, uses a two-ray
 look-ahead estimator (F1TENTH-style) to compute the car's angle relative
 to the right-hand wall and a projected distance a short look-ahead in
 front, then drives a Twist on /cmd_vel that holds the car a fixed
-distance from that wall.
+distance from that wall. Also subscribes to imu/gyro and uses the
+measured yaw rate as an additional damping term on the steering output.
 
 Right-turn handling: the right wall vanishing (D_ahead > max_plausible
 or estimator NaN) IS the corner signal. Doorways/windows lose the wall
@@ -19,9 +20,14 @@ fresh coast→turn cycle starts automatically.
 import math
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSProfile,
+    ReliabilityPolicy,
+    DurabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3
 
 
 class WallNavNode(Node):
@@ -45,6 +51,8 @@ class WallNavNode(Node):
         self._last_valid_D = None
         self._last_valid_alpha = None
         self._last_valid_time = None
+        # Latest IMU yaw rate (rad/s) for yaw-rate damping on the steering.
+        self._yaw_rate = 0.0
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
@@ -138,6 +146,12 @@ class WallNavNode(Node):
         # during corner approach) resets `_lost_since` and the commit
         # never fires. At ~8-10 Hz scan rate, 3 scans ≈ 0.3–0.4s.
         self.declare_parameter("lost_recovery_scans", 3)
+        # Damping gain on measured yaw rate (rad/s) from imu/gyro.z. Applied
+        # in the REP-103 control frame (before the steering_sign flip), so
+        # a positive yaw rate (CCW / left) subtracts from `steering` to
+        # oppose current rotation — works alongside kd (error derivative)
+        # and k_alpha (wall-angle feedback).
+        self.declare_parameter("k_yaw", 0.15)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -149,6 +163,18 @@ class WallNavNode(Node):
         self.scan_sub = self.create_subscription(
             LaserScan, "/scan", self.scan_callback, qos_profile_sensor_data
         )
+        # rover_node publishes imu/gyro with BEST_EFFORT; match it.
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+        self.gyro_sub = self.create_subscription(
+            Vector3, "imu/gyro", self.gyro_callback, sensor_qos
+        )
+
+    def gyro_callback(self, msg: Vector3):
+        self._yaw_rate = msg.z
 
     @staticmethod
     def _wrap(angle):
@@ -360,6 +386,7 @@ class WallNavNode(Node):
         kp = self.get_parameter("kp").value
         kd = self.get_parameter("kd").value
         k_alpha = self.get_parameter("k_alpha").value
+        k_yaw = self.get_parameter("k_yaw").value
         max_steer = self.get_parameter("max_steering").value
         v_max = self.get_parameter("forward_speed").value
         alpha_scale = math.radians(
@@ -389,10 +416,13 @@ class WallNavNode(Node):
         self._prev_d_error = d_error
         self._prev_time = now
 
-        # PD on distance + α-feedback. α<0 (car yawed toward right wall)
-        # pushes `steering` more positive → more "turn left" in REP-103 →
-        # actively un-yaws the car while it closes on the target.
-        steering = kp * error + kd * d_error - k_alpha * alpha
+        # PD on distance + α-feedback + yaw-rate damping. α<0 (car yawed
+        # toward right wall) pushes `steering` more positive → more "turn
+        # left" in REP-103 → actively un-yaws the car while it closes on
+        # the target. Yaw-rate term opposes the current rotation directly
+        # using the IMU (less noisy than differentiating distance error).
+        yaw_rate = self._yaw_rate
+        steering = kp * error + kd * d_error - k_alpha * alpha - k_yaw * yaw_rate
         # Sign-flip (if the rover is wired inverted) then clamp, then bias.
         # Bias shifts the neutral point — not part of the control effort, so
         # it's applied after the clamp.
@@ -411,7 +441,7 @@ class WallNavNode(Node):
         fwd_str = f"{fwd:.2f}" if math.isfinite(fwd) else "  inf"
         self.get_logger().info(
             f"D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}° fwd={fwd_str}m "
-            f"err={error:+.2f} dErr={d_error:+.2f} "
+            f"err={error:+.2f} dErr={d_error:+.2f} yaw={yaw_rate:+.2f} "
             f"steer={steering:+.2f} v={forward_speed:.2f}"
         )
 

@@ -28,12 +28,12 @@ class LineControlNode(Node):
         self.turn_steering_kp = (
             3.5   # proportional gain on turn-point offset (override)
         )
-        self.base_speed = 0.28  # forward speed when following (m/s)
-        self.turn_speed = 0.28  # forward speed when turning (m/s)
+        self.base_speed = 0.4   # forward speed when following (m/s)
+        self.turn_speed = 0.4   # forward speed when turning (m/s)
         self.speed_scale = 0.5       # how much steering reduces speed during following
-        self.min_speed = 0.22        # speed floor during following
+        self.min_speed = 0.32        # speed floor during following
         self.turn_speed_scale = 0.85 # more aggressive slowdown during committed turns
-        self.turn_min_speed = 0.18   # lower floor during committed turns
+        self.turn_min_speed = 0.26   # lower floor during committed turns
         self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 

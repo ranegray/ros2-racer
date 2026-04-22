@@ -18,8 +18,7 @@ from geometry_msgs.msg import Twist, Vector3
 
 
 # --- Tunable constants -------------------------------------------
-TARGET_DIST       = 0.55   # m — minimum desired distance (react if closer than this)
-DRIFT_THRESH      = 1.0    # m — only steer back toward wall if farther than this
+TARGET_DIST       = 0.90   # m — desired distance from right wall
 WALL_GONE_THRESH  = 3.0    # m — right wall gone above this
 WALL_GONE_SCANS   = 15     # consecutive scans before committing to right turn (1.5 s @ 10 Hz)
 TURNING_YAW_GATE  = 0.25   # rad/s — suppress wall-gone if |gyro_z| > this
@@ -183,17 +182,8 @@ class WallFollowerNode(Node):
             self._cmd_pub.publish(cmd)
             return
 
-        # PD wall follow — asymmetric dead zone:
-        #   right_dist < TARGET_DIST  → too close, steer away (negative error)
-        #   TARGET_DIST..DRIFT_THRESH → acceptable band, no correction
-        #   right_dist > DRIFT_THRESH → drifting too far, steer back (positive error)
-        if right_dist < TARGET_DIST:
-            error = right_dist - TARGET_DIST   # negative → steer left (away)
-        elif right_dist > DRIFT_THRESH:
-            error = right_dist - DRIFT_THRESH  # positive → steer right (toward wall)
-        else:
-            error = 0.0
-
+        # PD wall follow
+        error = right_dist - TARGET_DIST
         d_error = (error - self._prev_error) / dt
         self._prev_error = error
 

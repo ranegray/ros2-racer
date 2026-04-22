@@ -26,6 +26,9 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["depth_node = perception.depth_node:main"],
+        "console_scripts": [
+            "depth_node = perception.depth_node:main",
+            "avoid_obstacle_node = perception.obstacle_detector_node:main",
+        ],
     },
 )

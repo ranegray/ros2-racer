@@ -18,13 +18,13 @@ class LineControlNode(Node):
 
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
-        self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
+        self.target_x = 351.0  # pixel column where a centered line appears (camera is mounted off-center)
         self.steering_kp = 1.2   # proportional gain on follow-point offset
         self.steering_kd = 4.0   # derivative gain on follow-point offset
         self.base_speed = 0.4   # forward speed when following (m/s)
         self.speed_scale = 0.5       # how much steering reduces speed during following
         self.min_speed = 0.32        # speed floor during following
-        self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
+        self.steering_trim = 0.0  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         self.prev_offset = 0.0       # previous normalized offset for D term

@@ -1,20 +1,24 @@
 """
 wall_nav_node.py
 
-PD wall-following controller. Subscribes to /scan, uses a two-ray
-look-ahead estimator (F1TENTH-style) to compute the car's angle relative
-to the right-hand wall and a projected distance a short look-ahead in
-front, then drives a Twist on /cmd_vel that holds the car a fixed
-distance from that wall. Also subscribes to imu/gyro and uses the
-measured yaw rate as an additional damping term on the steering output.
+Heading-locked wall follower for a square course with 4 right turns.
 
-Right-turn handling: the right wall vanishing (D_ahead > max_plausible
-or estimator NaN) IS the corner signal. Doorways/windows lose the wall
-briefly; real corners lose it permanently. So we coast straight for
-`lost_coast_s` (clears short gaps without committing), then execute a
-fixed-duration ~90° right turn (`commit_turn_s` at full lock), then
-release back to PD. If the wall is still missing the next scan, a
-fresh coast→turn cycle starts automatically.
+Architecture: integrate yaw from imu/gyro.z (with a ~0.8s startup bias
+calibration while the car is stationary), snapshot the heading at
+cal-end as `reference[0]`. Down each side, HOLD the reference heading
+with a small lateral nudge proportional to wall-distance error — the
+car drives in a straight line with a tiny crab angle instead of
+chasing the wall in a PD loop.
+
+When the right wall vanishes (corner), commit full-lock right until
+|Δyaw| reaches `turn_exit_deg` from the pre-commit heading, then
+advance the side index (`reference[i] = reference[0] − i·90°`) and
+resume heading-hold on the next side. `commit_turn_s` is a safety
+cap; the IMU delta is the primary exit condition. After `num_turns`
+the car has returned to the starting orientation and stops.
+
+Emergency stop on close forward distance is the independent safety
+net across all modes.
 """
 
 import math
@@ -37,132 +41,118 @@ class WallNavNode(Node):
         self._setup_subscriptions()
         self._setup_publishers()
 
-        self._prev_error = 0.0
-        self._prev_d_error = 0.0
-        self._prev_time = None
-        self._lost_since = None
-        # Sticky-recovery counter: consecutive valid scans since we last
-        # saw wall_lost. We only exit lost mode when this reaches
-        # `lost_recovery_scans` — a single good scan in the middle of a
-        # spike-rejected burst does NOT reset the lost timer.
-        self._valid_run = 0
-        # For spike detection: last VALID (D_ahead, alpha) and its timestamp.
-        self._last_valid_D = None
-        self._last_valid_alpha = None
-        self._last_valid_time = None
-        # Latest IMU yaw rate (rad/s) for yaw-rate damping on the steering.
+        # --- Yaw integration (from imu/gyro.z) ---
+        self._yaw = 0.0
         self._yaw_rate = 0.0
+        self._last_gyro_time = None
+        # Gyro bias: averaged during the stationary startup window.
+        self._gyro_bias = 0.0
+        self._bias_samples = []
+        self._bias_start_time = None
+        self._bias_done = False
+
+        # --- Square-course state ---
+        self._reference_heading = None  # locked at end of bias cal
+        self._side_index = 0  # 0..num_turns-1 down each straight
+        self._commit_active = False
+        self._commit_start_yaw = None
+        self._commit_start_time = None
+        # Don't trigger a new commit immediately after the last one;
+        # the wall may not be back in view yet as the car straightens.
+        self._post_turn_until = 0.0
+
+        # --- Straight-mode helpers ---
+        self._lost_since = None
+        # Last accepted D_ahead (used to reject single-scan spikes
+        # without triggering corner logic).
+        self._last_valid_D = None
+        self._last_valid_time = None
 
     def _setup_parameters(self):
-        # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
-        # Note: on this robot `cmd_vel.angular.z` is a normalised STEERING
-        # command (rover_node maps it as angular.z * 500 clipped to ±1000,
-        # so ±2 = full lock). Gains are tuned for that, not for rad/s.
-        self.declare_parameter("kp", 0.8)
-        self.declare_parameter("kd", 0.15)
-        # α-feedback: counteracts the car's yaw toward/away from the wall
-        # on straights AND helps drive turn-in as the wall starts bending
-        # away through a corner. Final command:
-        # sign * (kp·err + kd·dE − k_alpha·α).
-        self.declare_parameter("k_alpha", 3.5)
-        # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
-        # lock (rover uses angular.z*500 clipped to ±1000).
+        # Note: cmd_vel.angular.z is a STEERING command on this rover
+        # (rover_node maps angular.z * 500 clipped to ±1000, so ±2.0
+        # = full servo lock). Gains are tuned for that, not rad/s.
+
+        # --- Heading-hold control ---
+        # Steering per radian of heading error. At max_steering=2.0 and
+        # 30° error, k_heading=2.0 puts steering at ~1.05 — strong but
+        # not saturated, so the yaw-rate damping still has authority.
+        self.declare_parameter("k_heading", 2.0)
+        # Yaw-rate damping (rad/s). Opposes rotation directly — less
+        # noisy than derivative of heading error.
+        self.declare_parameter("k_yaw", 0.3)
+        # Distance error → heading bias (rad per metre). Positive when
+        # too close to the wall (D<target) so the bias aims the car
+        # AWAY from the wall. Clipped by max_lateral_bias_deg.
+        self.declare_parameter("k_lat", 0.35)
+        self.declare_parameter("max_lateral_bias_deg", 12.0)
+
+        # --- Output shaping ---
         self.declare_parameter("max_steering", 2.0)
-        # Distance error is clipped to ±max_error before PD. Stops the
-        # controller from panic-saturating when the estimator briefly
-        # reports an absurd distance (window, long recess, beam glitch).
-        self.declare_parameter("max_error", 0.4)
-        # Anything beyond this is treated as "no wall visible". This is
-        # also the right-turn signal: the wall vanishes and stays gone.
-        self.declare_parameter("max_plausible_distance", 4.0)
-        # Spike detector: a corner grows D and α smoothly; a window makes
-        # them jump within a single scan. If either delta exceeds its
-        # limit, treat the scan as unreliable so it can't masquerade as
-        # a corner entry.
-        self.declare_parameter("max_d_jump", 0.8)
-        # 60° tolerates legitimate fast α swings during corner approach
-        # (the spike check otherwise rejects them as glitches and starves
-        # PD/α-feedback of the data it needs to drive the turn-in).
-        self.declare_parameter("max_alpha_jump_deg", 60.0)
-        # Drop stored last-valid state if no valid scan arrives within
-        # this many seconds, so the next scan doesn't compare against
-        # stale history.
-        self.declare_parameter("spike_stale_s", 0.7)
-        # Forward sweep used ONLY for the emergency stop. No corner
-        # detection here — right-wall absence is the corner signal.
-        self.declare_parameter("forward_half_window_deg", 20.0)
-        # Hard stop if the forward sweep reads closer than this in any
-        # mode. Catches "we're driving into a wall" failures regardless
-        # of why we got there.
-        self.declare_parameter("emergency_stop_fwd_m", 0.45)
+        # Rover is wired inverted relative to REP-103 (positive angular.z
+        # physically turns RIGHT). Flip to +1 if rewired.
+        self.declare_parameter("steering_sign", -1.0)
+        self.declare_parameter("steering_bias", 0.0)
+
+        # --- Distance estimator (F1TENTH two-ray) ---
         self.declare_parameter("target_distance", 0.8)
-        self.declare_parameter("forward_speed", 0.5)
-        # Two-ray look-ahead estimator. Angles measured from the car's
-        # forward axis (0°), REP-103 convention: +CCW, so the right wall
-        # sits at negative angles.
-        self.declare_parameter("ray_a_deg", -45.0)  # forward-right beam
-        self.declare_parameter("ray_b_deg", -90.0)  # perpendicular-right beam
+        self.declare_parameter("max_plausible_distance", 4.0)
+        self.declare_parameter("ray_a_deg", -45.0)
+        self.declare_parameter("ray_b_deg", -90.0)
         self.declare_parameter("ray_half_window_deg", 2.0)
         self.declare_parameter("look_ahead", 0.5)
-        # Slow the car down as the wall-angle |α| grows (corners, juts).
-        # 0.3 is the rolling stall floor, but 0.4 is needed to break
-        # static friction at full steering lock during a corner commit
-        # (the lost-cycle "turn" phase) — at 0.3 the car can stick mid-
-        # rotation and never complete the 90°.
+
+        # --- Forward sweep (emergency stop only) ---
+        self.declare_parameter("forward_half_window_deg", 20.0)
+        self.declare_parameter("emergency_stop_fwd_m", 0.45)
+
+        # --- Speed ---
+        self.declare_parameter("forward_speed", 0.5)
         self.declare_parameter("min_forward_speed", 0.4)
-        self.declare_parameter("speed_alpha_scale_deg", 45.0)
-        # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
-        self.declare_parameter("d_error_alpha", 0.5)
-        # Steering-output sign. This rover is wired with inverted steering
-        # (positive angular.z physically turns RIGHT, not left as REP-103
-        # would suggest). If the rover is ever rewired, flip this to +1.
-        self.declare_parameter("steering_sign", -1.0)
-        # Constant steering offset (in the *post-sign* frame) to trim a
-        # mechanically off-centre servo.
-        self.declare_parameter("steering_bias", 0.0)
-        # Wall-loss handling. Doorways/windows lose the right wall
-        # briefly; right-turn corners lose it for good. Coast straight
-        # for `lost_coast_s` to clear short gaps, then commit a fixed-
-        # duration 90° right turn (`commit_turn_s` at full-lock
-        # `lost_turn_steering` — raw post-sign — +2.0 = full-lock RIGHT
-        # on the inverted rover), then hand back to PD. If the wall is
-        # still missing on the next scan, a fresh coast-then-turn cycle
-        # starts automatically. The emergency-stop on close forward
-        # distance is the actual safety net for "we got into open space".
-        # `commit_turn_s` default of 2.0s is sized for ~45°/s rotation
-        # at full lock at 0.3 m/s, giving roughly a 90° heading change.
-        # 0.3s ≈ 2-3 scans at ~8-10 Hz: long enough to ride out single-
-        # scan glitches, short enough that the commit fires near the
-        # actual corner (otherwise the car drives several body-lengths
-        # past the entrance before turning and ends up too deep in the
-        # new corridor to make the turn cleanly).
-        self.declare_parameter("lost_coast_s", 0.3)
-        self.declare_parameter("lost_turn_steering", 2.0)
-        self.declare_parameter("commit_turn_s", 2.0)
-        # Sticky recovery: require this many consecutive valid scans
-        # before declaring wall recovered. Without stickiness, a brief
-        # valid scan in the middle of a spike-rejected burst (common
-        # during corner approach) resets `_lost_since` and the commit
-        # never fires. At ~8-10 Hz scan rate, 3 scans ≈ 0.3–0.4s.
-        self.declare_parameter("lost_recovery_scans", 3)
-        # Damping gain on measured yaw rate (rad/s) from imu/gyro.z. Applied
-        # in the REP-103 control frame (before the steering_sign flip), so
-        # a positive yaw rate (CCW / left) subtracts from `steering` to
-        # oppose current rotation — works alongside kd (error derivative)
-        # and k_alpha (wall-angle feedback).
-        self.declare_parameter("k_yaw", 0.15)
+
+        # --- IMU bias calibration ---
+        # Car must be stationary for this long at startup. Average of
+        # gyro.z over the window is subtracted thereafter.
+        self.declare_parameter("bias_cal_s", 0.8)
+
+        # --- Corner / commit ---
+        # Must be wall-lost this long before committing — absorbs
+        # single-scan glitches and lets a window gap pass without a
+        # spurious turn.
+        self.declare_parameter("lost_coast_s", 0.2)
+        # IMU-based exit: turn completes when |Δyaw| ≥ this. A little
+        # under 90° so the car is already lined up on the next side
+        # as it exits (the steering releases and the car drifts in
+        # slightly on its momentum).
+        self.declare_parameter("turn_exit_deg", 85.0)
+        # Safety cap on commit duration.
+        self.declare_parameter("commit_turn_s", 3.5)
+        # Grace period after commit exit during which wall-lost does
+        # NOT trigger another commit. Gives the controller time to
+        # settle on the new reference and the wall to come into view.
+        self.declare_parameter("post_turn_s", 1.5)
+
+        # --- Square-course plan ---
+        # 4 right turns returns the car to its start orientation. Set
+        # to 0 to loop the course indefinitely.
+        self.declare_parameter("num_turns", 4)
+
+        # --- Spike rejection (decoupled from wall-lost) ---
+        # A scan whose D_ahead jumps more than this from the last
+        # accepted value within spike_stale_s is treated as an
+        # outlier — D is ignored for this scan's lateral bias, but
+        # the commit logic does NOT fire.
+        self.declare_parameter("max_d_jump", 0.8)
+        self.declare_parameter("spike_stale_s", 0.7)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
     def _setup_subscriptions(self):
-        # RPLIDAR publishes /scan with SENSOR_DATA QoS (best-effort). Using
-        # the default (reliable) QoS here causes a silent QoS mismatch and
-        # the callback never fires.
+        # RPLIDAR publishes /scan with SENSOR_DATA QoS (best-effort).
         self.scan_sub = self.create_subscription(
             LaserScan, "/scan", self.scan_callback, qos_profile_sensor_data
         )
-        # rover_node publishes imu/gyro with BEST_EFFORT; match it.
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -172,18 +162,54 @@ class WallNavNode(Node):
             Vector3, "imu/gyro", self.gyro_callback, sensor_qos
         )
 
+    # -----------------------------------------------------------------
+    # Gyro: bias calibration + yaw integration
+    # -----------------------------------------------------------------
+
     def gyro_callback(self, msg: Vector3):
-        self._yaw_rate = msg.z
+        now = self.get_clock().now().nanoseconds * 1e-9
+        z = msg.z
+
+        if not self._bias_done:
+            if self._bias_start_time is None:
+                self._bias_start_time = now
+            self._bias_samples.append(z)
+            self._last_gyro_time = now
+            cal_s = self.get_parameter("bias_cal_s").value
+            if (now - self._bias_start_time) >= cal_s and len(self._bias_samples) > 0:
+                self._gyro_bias = sum(self._bias_samples) / len(self._bias_samples)
+                self._bias_done = True
+                self._yaw = 0.0
+                self._reference_heading = 0.0
+                self.get_logger().info(
+                    f"gyro bias cal done: bias={self._gyro_bias:+.4f} rad/s "
+                    f"from {len(self._bias_samples)} samples — "
+                    f"reference heading locked at yaw=0"
+                )
+            return
+
+        corrected = z - self._gyro_bias
+        self._yaw_rate = corrected
+        if self._last_gyro_time is None:
+            self._last_gyro_time = now
+            return
+        dt = now - self._last_gyro_time
+        self._last_gyro_time = now
+        # Guard against large dt (paused clock, etc.).
+        if 0.0 < dt < 0.5:
+            self._yaw = self._wrap(self._yaw + corrected * dt)
+
+    # -----------------------------------------------------------------
+    # LIDAR helpers
+    # -----------------------------------------------------------------
 
     @staticmethod
     def _wrap(angle):
-        """Wrap an angle to (-pi, pi]."""
         return math.atan2(math.sin(angle), math.cos(angle))
 
     def _ray_at_angle(
         self, msg: LaserScan, target_angle: float, half_window: float
     ) -> float:
-        """Mean of valid rays within `half_window` of `target_angle`. NaN if none."""
         target = self._wrap(target_angle)
         readings = []
         for i, r in enumerate(msg.ranges):
@@ -197,27 +223,23 @@ class WallNavNode(Node):
         return sum(readings) / len(readings)
 
     def _forward_distance(self, msg: LaserScan) -> float:
-        """Nearest valid range in a forward-facing window (emergency stop only)."""
         half = math.radians(self.get_parameter("forward_half_window_deg").value)
-        target = 0.0
         nearest = float("inf")
         for i, r in enumerate(msg.ranges):
             if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
                 continue
             angle = self._wrap(msg.angle_min + i * msg.angle_increment)
-            if abs(self._wrap(angle - target)) <= half:
+            if abs(self._wrap(angle)) <= half:
                 if r < nearest:
                     nearest = r
         return nearest
 
-    def _right_wall_state(self, msg: LaserScan):
+    def _right_wall_distance(self, msg: LaserScan) -> float:
         """
-        Return (D_ahead, alpha):
-          alpha   — car's heading angle relative to the wall (0 = parallel).
-          D_ahead — perpendicular distance to wall a `look_ahead` in front.
-        Falls back to single-beam estimates if the other beam is lost to
-        a doorway, window, jut, or recess. Both NaN only when both beams
-        are missing.
+        Two-ray look-ahead distance to the right wall. NaN if the
+        perpendicular beam is missing (true wall loss). Falls back to
+        the perpendicular beam alone if only the forward-diagonal is
+        missing (partial occlusion).
         """
         ray_a_deg = self.get_parameter("ray_a_deg").value
         ray_b_deg = self.get_parameter("ray_b_deg").value
@@ -229,212 +251,203 @@ class WallNavNode(Node):
         a_ok = math.isfinite(a)
         b_ok = math.isfinite(b)
 
-        # Perpendicular (-90°) beam missing: report wall lost. Don't fall
-        # back to the forward-diagonal alone — that beam can be hitting
-        # whatever's in front of the car (wall ahead, far wall of an
-        # intersection) and report it as "right wall", which the PD then
-        # follows into impact. A doorway recessed a few feet still
-        # returns a valid perpendicular reading off the back of the
-        # recess; only true wall-loss (windows, corners, hallway exits)
-        # produces a missing perp beam.
         if not b_ok:
-            return float("nan"), float("nan")
-
-        # Forward-diagonal missing: perpendicular only, no look-ahead.
-        # `b` is by definition the right wall, so this is safe.
+            # Perp beam missing = wall gone.
+            return float("nan")
         if not a_ok:
-            return b, 0.0
+            # Degraded: perp only, no look-ahead projection.
+            return b
 
-        # Use the magnitude of the angular gap so the formula works
-        # regardless of which side of forward the rays sit on.
         theta = abs(math.radians(ray_b_deg - ray_a_deg))
-        # F1TENTH estimator: wall angle, then project current distance forward.
         alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
         D_now = b * math.cos(alpha)
-        D_ahead = D_now + L * math.sin(alpha)
-        return D_ahead, alpha
+        return D_now + L * math.sin(alpha)
+
+    # -----------------------------------------------------------------
+    # Control
+    # -----------------------------------------------------------------
+
+    def _reference_for_side(self, side_index: int) -> float:
+        # Every hard turn is a right turn → CW → yaw decreases by π/2.
+        return self._wrap(self._reference_heading - (math.pi / 2) * side_index)
+
+    def _publish_stop(self):
+        self.cmd_pub.publish(Twist())
+
+    def _publish_full_right(self, linear: float):
+        """Full-lock right turn routed through steering_sign."""
+        sign = self.get_parameter("steering_sign").value
+        max_steer = self.get_parameter("max_steering").value
+        bias = self.get_parameter("steering_bias").value
+        cmd = Twist()
+        cmd.linear.x = float(linear)
+        # Right in the pre-sign (REP-103) frame is negative angular.z.
+        cmd.angular.z = float(sign * (-max_steer) + bias)
+        self.cmd_pub.publish(cmd)
 
     def scan_callback(self, msg: LaserScan):
-        D_ahead, alpha = self._right_wall_state(msg)
-        fwd = self._forward_distance(msg)
-
-        v_min = self.get_parameter("min_forward_speed").value
-        bias = self.get_parameter("steering_bias").value
-        sign = self.get_parameter("steering_sign").value
-        max_plausible = self.get_parameter("max_plausible_distance").value
-
         now = self.get_clock().now().nanoseconds * 1e-9
+        fwd = self._forward_distance(msg)
+        D = self._right_wall_distance(msg)
 
-        # Emergency stop: forward sweep says we're physically close to a
-        # wall. Independent safety net — fires regardless of mode.
-        e_stop_fwd = self.get_parameter("emergency_stop_fwd_m").value
-        if math.isfinite(fwd) and fwd < e_stop_fwd:
+        # Emergency stop — independent of mode.
+        e_stop = self.get_parameter("emergency_stop_fwd_m").value
+        if math.isfinite(fwd) and fwd < e_stop:
             self.get_logger().warn(
-                f"EMERGENCY STOP: fwd={fwd:.2f}m < {e_stop_fwd:.2f}m"
+                f"EMERGENCY STOP: fwd={fwd:.2f}m < {e_stop:.2f}m"
             )
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
 
-        # Spike detector: reject a scan whose (D_ahead, α) jumped farther
-        # than physically possible from the last valid reading. Prevents
-        # a window from masquerading as a corner entry.
+        # Wait for bias calibration to complete before driving.
+        if not self._bias_done or self._reference_heading is None:
+            self._publish_stop()
+            return
+
+        # Course complete.
+        num_turns = self.get_parameter("num_turns").value
+        if num_turns > 0 and self._side_index >= num_turns:
+            self._publish_stop()
+            return
+
+        v_min = self.get_parameter("min_forward_speed").value
+
+        # ---- Commit (turn in progress) ----
+        if self._commit_active:
+            delta = self._wrap(self._yaw - self._commit_start_yaw)
+            elapsed = now - self._commit_start_time
+            turn_exit = math.radians(self.get_parameter("turn_exit_deg").value)
+            timeout = self.get_parameter("commit_turn_s").value
+            # Right turn: yaw decreases (CW), so delta is negative.
+            done = (-delta) >= turn_exit or elapsed >= timeout
+            if not done:
+                self._publish_full_right(v_min)
+                self.get_logger().info(
+                    f"commit: side={self._side_index} "
+                    f"Δyaw={math.degrees(-delta):+.1f}°/"
+                    f"{math.degrees(turn_exit):.0f}° "
+                    f"t={elapsed:.2f}s"
+                )
+                return
+            # Turn complete — advance and fall through to straight mode.
+            reason = "timeout" if elapsed >= timeout else "yaw-target"
+            self._side_index += 1
+            self._commit_active = False
+            self._commit_start_yaw = None
+            self._commit_start_time = None
+            self._lost_since = None
+            self._post_turn_until = now + self.get_parameter("post_turn_s").value
+            self.get_logger().info(
+                f"commit exit ({reason}): advanced to side={self._side_index}, "
+                f"yaw={math.degrees(self._yaw):+.1f}° "
+                f"new_ref={math.degrees(self._reference_for_side(self._side_index)):+.1f}°"
+            )
+            # Course complete after this turn?
+            if num_turns > 0 and self._side_index >= num_turns:
+                self._publish_stop()
+                return
+
+        # ---- Spike rejection (D only, does NOT trigger commit) ----
         stale_s = self.get_parameter("spike_stale_s").value
         max_d_jump = self.get_parameter("max_d_jump").value
-        max_alpha_jump = math.radians(self.get_parameter("max_alpha_jump_deg").value)
-        is_spike = False
+        D_usable = D
         if (
-            math.isfinite(D_ahead)
+            math.isfinite(D)
+            and self._last_valid_D is not None
             and self._last_valid_time is not None
             and (now - self._last_valid_time) < stale_s
+            and abs(D - self._last_valid_D) > max_d_jump
         ):
-            dD = abs(D_ahead - self._last_valid_D)
-            da = abs(alpha - self._last_valid_alpha)
-            if dD > max_d_jump or da > max_alpha_jump:
-                is_spike = True
-                self.get_logger().info(
-                    f"spike rejected: ΔD={dD:.2f}m Δα={math.degrees(da):+.1f}°"
-                )
-        # Invalidate stale history so we don't compare the next valid
-        # scan against an outdated (D, α).
+            self.get_logger().info(
+                f"D spike rejected: {D:.2f}m vs last {self._last_valid_D:.2f}m"
+            )
+            D_usable = float("nan")
+        else:
+            if math.isfinite(D):
+                self._last_valid_D = D
+                self._last_valid_time = now
+        # Drop stale history.
         if (
             self._last_valid_time is not None
             and (now - self._last_valid_time) >= stale_s
         ):
             self._last_valid_D = None
-            self._last_valid_alpha = None
             self._last_valid_time = None
 
-        # Current-frame wall-lost determination.
-        wall_lost_now = (
-            (not math.isfinite(D_ahead)) or D_ahead > max_plausible or is_spike
-        )
+        # ---- Wall-lost → commit decision ----
+        max_plausible = self.get_parameter("max_plausible_distance").value
+        wall_lost = (not math.isfinite(D)) or D > max_plausible
 
-        # Sticky recovery: a single valid scan does NOT end lost mode.
-        # During corner approach the spike detector rejects legitimate
-        # fast α swings as "spikes" — and the brief valid scans between
-        # those rejections used to reset `_lost_since`, which meant the
-        # commit never had time to fire. Now we require N consecutive
-        # valid scans before clearing lost state.
-        if wall_lost_now:
-            self._valid_run = 0
+        if wall_lost:
             if self._lost_since is None:
                 self._lost_since = now
-        else:
-            self._valid_run += 1
-
-        recovery_scans = self.get_parameter("lost_recovery_scans").value
-        treat_as_lost = wall_lost_now or (
-            self._lost_since is not None and self._valid_run < recovery_scans
-        )
-
-        # Wall lost: doorways/windows lose it briefly, right-turn corners
-        # lose it permanently. Three phases:
-        #   coast   (0  ≤ t < lost_coast_s)        — handles short gaps
-        #   turn    (   lost_coast_s ≤ t < +turn_s) — fixed-duration ~90°
-        #   release (t ≥ lost_coast_s + turn_s)    — hand back to PD
-        # If the wall is still missing the next scan, the cycle restarts.
-        if treat_as_lost:
             lost_for = now - self._lost_since
             coast_s = self.get_parameter("lost_coast_s").value
-            turn_s = self.get_parameter("commit_turn_s").value
-
-            # Reset PD state so it doesn't spike when the wall returns.
-            self._prev_error = 0.0
-            self._prev_d_error = 0.0
-            self._prev_time = now
-
-            cmd = Twist()
-            cmd.linear.x = float(v_min)
-
-            if lost_for < coast_s:
-                # Brief gap (doorway, window) — coast straight.
-                cmd.angular.z = float(bias)
-                mode = "coast"
-            elif lost_for < coast_s + turn_s:
-                # Execute the 90° right turn at full lock. Raw post-sign
-                # value (no flip, no clamp, no bias) — +2.0 = full-lock
-                # RIGHT on the inverted rover.
-                cmd.angular.z = float(self.get_parameter("lost_turn_steering").value)
-                mode = "turn"
-            else:
-                # Turn complete. Release the lost cycle. If the wall is
-                # still missing this scan we publish a brief straight so
-                # PD doesn't run on NaN; the next scan will start a fresh
-                # coast→turn cycle if still lost.
-                cmd.angular.z = float(bias)
-                mode = "release"
-                self._lost_since = None
-                self._valid_run = 0
-
-            self.cmd_pub.publish(cmd)
-            self.get_logger().info(
-                f"wall lost ({lost_for:.2f}s) {mode}: "
-                f"steer={cmd.angular.z:+.2f} v={v_min:.2f} "
-                f"run={self._valid_run}/{recovery_scans}"
-            )
-            return
-
-        self._lost_since = None
-
-        target = self.get_parameter("target_distance").value
-        kp = self.get_parameter("kp").value
-        kd = self.get_parameter("kd").value
-        k_alpha = self.get_parameter("k_alpha").value
-        k_yaw = self.get_parameter("k_yaw").value
-        max_steer = self.get_parameter("max_steering").value
-        v_max = self.get_parameter("forward_speed").value
-        alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
-        d_alpha = self.get_parameter("d_error_alpha").value
-        max_error = self.get_parameter("max_error").value
-
-        # Scan accepted — record it as the new reference for spike detection.
-        self._last_valid_D = D_ahead
-        self._last_valid_alpha = alpha
-        self._last_valid_time = now
-
-        # Positive error => too close to the wall => steer left (+angular.z).
-        # Clip before the PD so a single outlier reading can't send the
-        # gains to full lock.
-        error = target - D_ahead
-        error = max(-max_error, min(max_error, error))
-
-        if self._prev_time is None:
-            d_error = 0.0
+            # Only start a commit after the coast window AND outside
+            # the post-turn grace period.
+            if lost_for >= coast_s and now >= self._post_turn_until:
+                self._commit_active = True
+                self._commit_start_yaw = self._yaw
+                self._commit_start_time = now
+                self._publish_full_right(v_min)
+                self.get_logger().info(
+                    f"commit start: side={self._side_index} "
+                    f"yaw={math.degrees(self._yaw):+.1f}° "
+                    f"lost_for={lost_for:.2f}s"
+                )
+                return
+            # Still in coast / post-turn grace — fall through to
+            # straight mode with no lateral bias (D unavailable).
         else:
-            dt = now - self._prev_time
-            raw_d = (error - self._prev_error) / dt if dt > 0 else 0.0
-            d_error = d_alpha * raw_d + (1.0 - d_alpha) * self._prev_d_error
-        self._prev_error = error
-        self._prev_d_error = d_error
-        self._prev_time = now
+            self._lost_since = None
 
-        # PD on distance + α-feedback + yaw-rate damping. α<0 (car yawed
-        # toward right wall) pushes `steering` more positive → more "turn
-        # left" in REP-103 → actively un-yaws the car while it closes on
-        # the target. Yaw-rate term opposes the current rotation directly
-        # using the IMU (less noisy than differentiating distance error).
-        yaw_rate = self._yaw_rate
-        steering = kp * error + kd * d_error - k_alpha * alpha - k_yaw * yaw_rate
-        # Sign-flip (if the rover is wired inverted) then clamp, then bias.
-        # Bias shifts the neutral point — not part of the control effort, so
-        # it's applied after the clamp.
-        steering = sign * steering
-        steering = max(-max_steer, min(max_steer, steering)) + bias
+        # ---- Straight mode: heading-hold + lateral bias ----
+        ref = self._reference_for_side(self._side_index)
+        k_h = self.get_parameter("k_heading").value
+        k_y = self.get_parameter("k_yaw").value
+        k_lat = self.get_parameter("k_lat").value
+        max_bias = math.radians(self.get_parameter("max_lateral_bias_deg").value)
+        target = self.get_parameter("target_distance").value
+        max_steer = self.get_parameter("max_steering").value
+        sign = self.get_parameter("steering_sign").value
+        bias_out = self.get_parameter("steering_bias").value
 
-        # Ease off the throttle when the wall is swinging away (corner/jut).
-        speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)
-        forward_speed = max(v_min, v_max * speed_scale)
+        # Lateral bias: positive (CCW / left in REP-103) when too close
+        # to the right wall. Zero when D unavailable so we just hold
+        # the reference heading.
+        if math.isfinite(D_usable) and D_usable <= max_plausible:
+            lat_bias = k_lat * (target - D_usable)
+            lat_bias = max(-max_bias, min(max_bias, lat_bias))
+        else:
+            lat_bias = 0.0
 
-        drive_cmd = Twist()
-        drive_cmd.linear.x = float(forward_speed)
-        drive_cmd.angular.z = float(steering)
-        self.cmd_pub.publish(drive_cmd)
+        setpoint = self._wrap(ref + lat_bias)
+        heading_err = self._wrap(setpoint - self._yaw)
 
+        # Pre-sign (REP-103) steering: positive error → positive
+        # angular.z → left. Sign-flip applied on output.
+        steering_pre = k_h * heading_err - k_y * self._yaw_rate
+        steering_pre = max(-max_steer, min(max_steer, steering_pre))
+        steering_cmd = sign * steering_pre + bias_out
+
+        # Slow down when heading error is large (entry of a new side,
+        # recovery from perturbation).
+        v_max = self.get_parameter("forward_speed").value
+        err_frac = min(1.0, abs(heading_err) / math.radians(30.0))
+        forward_speed = max(v_min, v_max * (1.0 - 0.5 * err_frac))
+
+        cmd = Twist()
+        cmd.linear.x = float(forward_speed)
+        cmd.angular.z = float(steering_cmd)
+        self.cmd_pub.publish(cmd)
+
+        D_str = f"{D_usable:.2f}" if math.isfinite(D_usable) else "  nan"
         fwd_str = f"{fwd:.2f}" if math.isfinite(fwd) else "  inf"
         self.get_logger().info(
-            f"D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}° fwd={fwd_str}m "
-            f"err={error:+.2f} dErr={d_error:+.2f} yaw={yaw_rate:+.2f} "
-            f"steer={steering:+.2f} v={forward_speed:.2f}"
+            f"side={self._side_index} D={D_str}m fwd={fwd_str}m "
+            f"ref={math.degrees(ref):+.1f}° yaw={math.degrees(self._yaw):+.1f}° "
+            f"err={math.degrees(heading_err):+.1f}° bias={math.degrees(lat_bias):+.1f}° "
+            f"steer={steering_cmd:+.2f} v={forward_speed:.2f}"
         )
 
 

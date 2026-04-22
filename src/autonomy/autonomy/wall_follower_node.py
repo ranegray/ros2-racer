@@ -74,7 +74,10 @@ class WallFollowerNode(Node):
         self._prev_error = 0.0
         self._last_scan_t = None
         self._wall_gone_count = 0
-        self._gyro_z = 0.0  # latest yaw rate from IMU (rad/s)
+        self._gyro_z = 0.0         # latest yaw rate from IMU (rad/s)
+        self._in_right_turn = False
+        self._turn_accumulated = 0.0  # radians turned so far during hard right
+        self._turn_start_t = None
 
         self._right_idx = []
         self._right_weights = np.array([])
@@ -144,22 +147,39 @@ class WallFollowerNode(Node):
             self.get_logger().debug(f"FRONT OBSTACLE {front_dist:.2f} m — turning left")
             return
 
-        # Wall-gone hysteresis + IMU gate
-        # Only count toward the trigger if the robot is currently going straight
-        # (IMU says |yaw_rate| is low). Turning past a window/alcove won't trigger.
+        # If currently executing a right turn, integrate gyro to track rotation.
+        # Exit once 90° accumulated or wall reappears.
+        if self._in_right_turn:
+            self._turn_accumulated += abs(self._gyro_z) * dt
+            if self._turn_accumulated >= math.pi / 2 or right_dist < WALL_GONE_THRESH:
+                self._in_right_turn = False
+                self._turn_accumulated = 0.0
+                self._wall_gone_count = 0
+                self.get_logger().info(
+                    f"Right turn complete — {math.degrees(self._turn_accumulated):.0f}° "
+                    f"turned, right_dist={right_dist:.2f}"
+                )
+                # Fall through to PD
+            else:
+                cmd.linear.x = TURN_SPEED
+                cmd.angular.z = HARD_STEER
+                self._cmd_pub.publish(cmd)
+                return
+
+        # Wall-gone hysteresis + IMU gate: only count when going straight
         if right_dist > WALL_GONE_THRESH and abs(self._gyro_z) < TURNING_YAW_GATE:
             self._wall_gone_count += 1
         else:
             self._wall_gone_count = 0
 
         if self._wall_gone_count >= WALL_GONE_SCANS:
+            self._in_right_turn = True
+            self._turn_accumulated = 0.0
+            self._wall_gone_count = 0
+            self.get_logger().info("Starting right turn")
             cmd.linear.x = TURN_SPEED
             cmd.angular.z = HARD_STEER
             self._cmd_pub.publish(cmd)
-            self.get_logger().debug(
-                f"RIGHT WALL GONE {right_dist:.2f} m "
-                f"({self._wall_gone_count} scans, gyro_z={self._gyro_z:.2f}) — turning right"
-            )
             return
 
         # PD wall follow

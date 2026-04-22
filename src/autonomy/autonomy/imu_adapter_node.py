@@ -12,8 +12,16 @@ can still use the gyro for yaw-rate integration.
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Vector3
 from sensor_msgs.msg import Imu
+
+# Match rover_node's BEST_EFFORT sensor QoS exactly
+_SENSOR_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    depth=10,
+)
 
 
 class ImuAdapterNode(Node):
@@ -23,8 +31,8 @@ class ImuAdapterNode(Node):
         self._latest_gyro: Vector3 | None = None
         self._latest_accel: Vector3 | None = None
 
-        self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, 10)
-        self.create_subscription(Vector3, "imu/accel", self._accel_cb, 10)
+        self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _SENSOR_QOS)
+        self.create_subscription(Vector3, "imu/accel", self._accel_cb, _SENSOR_QOS)
         self._pub = self.create_publisher(Imu, "/imu", 10)
 
         self.get_logger().info("IMU adapter node started")

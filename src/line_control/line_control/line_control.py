@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PointStamped
@@ -152,7 +153,9 @@ class LineControlNode(Node):
             return
 
         # rover_node accepts angular.z in [-2.0, 2.0]; clamping tighter leaves steering on the table.
-        cmd.angular.z = max(-max_angular, min(max_angular, steer + self.steering_trim))
+        # tanh soft saturation: linear near center, smoothly limits at large offsets
+        # instead of a hard clamp that causes full-lock overshoot.
+        cmd.angular.z = max_angular * math.tanh((steer + self.steering_trim) / max_angular)
         # Normalize steering magnitude to [0,1] for the speed scaler so tuning semantics stay the same.
         steer_frac = abs(cmd.angular.z) / max_angular
         # Also slow down when the offset is changing fast (bend detected early via D term).

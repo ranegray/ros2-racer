@@ -8,9 +8,13 @@ class LineControlNode(Node):
     def __init__(self):
         super().__init__("line_control_node")
         self.latest_follow = None
+        self.latest_turn = None
 
         self.follow_sub = self.create_subscription(
             PointStamped, "line_follow_point", self._follow_callback, 10
+        )
+        self.turn_sub = self.create_subscription(
+            PointStamped, "line_turn_point", self._turn_callback, 10
         )
         self.publisher_ = self.create_publisher(Twist, "cmd_vel", 10)
 
@@ -18,13 +22,17 @@ class LineControlNode(Node):
 
         self.image_width = 640
         self.image_center_x = self.image_width / 2.0
-        self.target_x = 351.0  # pixel column where a centered line appears (camera is mounted off-center)
-        self.steering_kp = 2.2   # proportional gain on follow-point offset
-        self.steering_kd = 4.0   # derivative gain on follow-point offset
-        self.base_speed = 0.4   # forward speed when following (m/s)
-        self.speed_scale = 0.5       # how much steering reduces speed during following
-        self.min_speed = 0.32        # speed floor during following
-        self.steering_trim = 0.0  # positive = right bias; tune to counteract physical left-pull of wheels
+        self.target_x = 400.0  # pixel column where a centered line appears (camera is mounted off-center)
+        self.steering_kp = 1.2   # proportional gain on follow-point offset
+        self.steering_kd = 1.0   # derivative gain on follow-point offset
+        self.turn_steering_kp = (
+            3.5   # proportional gain on turn-point offset (override)
+        )
+        self.base_speed = 0.55  # forward speed when following (m/s)
+        self.turn_speed = 0.55  # forward speed when turning (m/s)
+        self.speed_scale = 0.5  # how much steering reduces speed (0=no reduction, 1=full stop at max steer)
+        self.min_speed = 0.45   # floor — motors must always get at least this much throttle
+        self.steering_trim = 0.1  # positive = right bias; tune to counteract physical left-pull of wheels
         self.goal_timeout = 1.0  # stop if no goal received for this long (s)
 
         self.prev_offset = 0.0       # previous normalized offset for D term
@@ -35,6 +43,9 @@ class LineControlNode(Node):
 
     def _follow_callback(self, msg):
         self.latest_follow = msg
+
+    def _turn_callback(self, msg):
+        self.latest_turn = msg
 
     def _extract(self, msg):
         """Return (x, y) in pixels if msg is fresh and non-empty, else None."""
@@ -55,8 +66,17 @@ class LineControlNode(Node):
         cmd = Twist()
 
         follow = self._extract(self.latest_follow)
+        turn = self._extract(self.latest_turn)
 
-        if follow is not None:
+        if turn is not None:
+            # Right-turn override: detector saw a chunk of tape far to the right.
+            # Commit to the turn and steer toward it.
+            offset = (turn[0] - self.target_x) / self.image_center_x
+            steer = self.turn_steering_kp * offset
+            speed = self.turn_speed
+            self.prev_offset = offset  # keep prev_offset current to avoid D spike on return to follow
+            self.last_known_offset = offset
+        elif follow is not None:
             offset = (follow[0] - self.target_x) / self.image_center_x
             d_offset = (offset - self.prev_offset) / self.dt
             self.prev_offset = offset
@@ -64,13 +84,11 @@ class LineControlNode(Node):
             steer = self.steering_kp * offset + self.steering_kd * d_offset
             speed = self.base_speed
         else:
-            # Line lost — pivot toward the side we last saw it on until found.
+            # Line lost — steer full toward the side we last saw it on
             if self.last_known_offset > 0:
-                cmd.angular.z = 1.0
+                cmd.angular.z = 1.0    # full right
             elif self.last_known_offset < 0:
-                cmd.angular.z = -1.0
-            else:
-                cmd.angular.z = 0.0
+                cmd.angular.z = -1.0   # full left
             cmd.linear.x = self.min_speed
             self.publisher_.publish(cmd)
             return
@@ -79,7 +97,8 @@ class LineControlNode(Node):
         cmd.linear.x = max(self.min_speed, speed * (1.0 - abs(cmd.angular.z) * self.speed_scale))
         self.publisher_.publish(cmd)
         self.get_logger().debug(
-            f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} follow={follow}"
+            f"speed={cmd.linear.x:.2f} steer={cmd.angular.z:.2f} "
+            f"follow={follow} turn={turn}"
         )
 
 

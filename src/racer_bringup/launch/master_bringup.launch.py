@@ -164,5 +164,5 @@ def generate_launch_description():
         telemetry_node,
         rosbridge_launch,
 
-        LogInfo(msg='[racer_bringup] Shared stack launched. Select a controller in system.launch.py or publish /cmd_vel manually.'),
+        LogInfo(msg='[racer_bringup] Shared stack launched. Select a controller in system_launch.py or publish /cmd_vel manually.'),
     ])

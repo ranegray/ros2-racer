@@ -111,7 +111,7 @@ class LineControlNode(Node):
             #   Phase 2: reverse for up to reverse_duration_cap, then cooldown/stop
             seen_ever = self.last_line_seen_sec is not None
 
-            # Already in reverse phase — keep going.
+            # Already in reverse phase — keep going, steering opposite to steer phase.
             if self.reverse_start_sec is not None:
                 if now - self.reverse_start_sec >= self.reverse_duration_cap:
                     self.reverse_start_sec = None
@@ -119,6 +119,7 @@ class LineControlNode(Node):
                     self.publisher_.publish(cmd)
                     return
                 cmd.linear.x = -self.reverse_speed
+                cmd.angular.z = -max_angular if self.last_known_offset >= 0 else max_angular
                 self.publisher_.publish(cmd)
                 return
 

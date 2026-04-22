@@ -6,7 +6,7 @@ These launch files are installed with the `racer_bringup` package, so after buil
 ros2 launch racer_bringup <launch_file>
 ```
 
-The main entrypoint is `system_launch.py`. It starts the shared hardware stack from `master_bringup.launch.py` and then enables a controller mode with the `line` launch argument.
+The main entrypoint is `system_launch.py`. It starts the shared hardware stack from `master_bringup.launch.py` and then enables a controller mode with the `controller` launch argument.
 
 ## Recommended launch
 
@@ -19,19 +19,19 @@ ros2 launch racer_bringup system_launch.py
 Start line following:
 
 ```bash
-ros2 launch racer_bringup system_launch.py line:=line
+ros2 launch racer_bringup system_launch.py controller:=line
 ```
 
 Start wall following:
 
 ```bash
-ros2 launch racer_bringup system_launch.py line:=wall
+ros2 launch racer_bringup system_launch.py controller:=wall
 ```
 
 Useful overrides:
 
 ```bash
-ros2 launch racer_bringup system_launch.py line:=line \
+ros2 launch racer_bringup system_launch.py controller:=line \
   lidar_port:=/dev/ttyUSB0 \
   rover_port:=/dev/ttyACM1
 ```

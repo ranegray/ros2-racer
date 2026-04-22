@@ -28,13 +28,13 @@ from launch_ros.actions import Node
 
 def _controller_is(name: str):
     return IfCondition(
-        PythonExpression(["'", LaunchConfiguration('line'), "' == '", name, "'"])
+        PythonExpression(["'", LaunchConfiguration('controller'), "' == '", name, "'"])
     )
 
 
 def generate_launch_description():
-    line_arg = DeclareLaunchArgument(
-        'line',
+    controller_arg = DeclareLaunchArgument(
+        'controller',
         default_value='none',
         description='Controller to start: none, line, or wall',
     )
@@ -118,7 +118,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        line_arg,
+        controller_arg,
         lidar_port_arg,
         lidar_baudrate_arg,
         rover_port_arg,
@@ -126,7 +126,12 @@ def generate_launch_description():
         telemetry_rate_arg,
         camera_rate_arg,
         image_quality_arg,
-        LogInfo(msg=['[racer_bringup] Starting full system. line:=', LaunchConfiguration('line')]),
+        LogInfo(
+            msg=[
+                '[racer_bringup] Starting full system. controller:=',
+                LaunchConfiguration('controller'),
+            ]
+        ),
         master_bringup,
         line_detector,
         line_control,

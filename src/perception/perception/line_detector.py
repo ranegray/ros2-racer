@@ -27,7 +27,8 @@ class LineDetectorNode(Node):
         self.image_height = 480
 
         # Detection band (y_start, y_end, x_start, x_end)
-        self.band = (self.image_height // 2, self.image_height, 0, self.image_width)
+        # Starting at 1/3 height gives lookahead — centroid shifts earlier as turns approach.
+        self.band = (self.image_height // 3, self.image_height, 0, self.image_width)
 
         self._setup_subscribers()
         self._setup_publishers()

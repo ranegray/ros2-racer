@@ -14,13 +14,11 @@ Controller selector:
   - wall   : wall_nav_node
 """
 
+import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    IncludeLaunchDescription,
-    LogInfo,
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -127,14 +125,11 @@ def generate_launch_description():
         telemetry_rate_arg,
         camera_rate_arg,
         image_quality_arg,
-
         LogInfo(msg=['[racer_bringup] Starting full system. line:=', LaunchConfiguration('line')]),
-
         master_bringup,
         line_detector,
         line_control,
         wall_nav,
-
         LogInfo(
             msg='[racer_bringup] Full system launched. Supported controllers: line, wall.'
         ),

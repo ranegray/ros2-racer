@@ -2,72 +2,52 @@
 """
 wall_follower_node.py
 
-Right-wall follower with:
-  - Cosine-weighted right-wall distance over a wide scan band
-  - IMU yaw-rate gate: suppress wall-gone trigger if robot is already turning
-  - Hysteresis: require 15 consecutive scans before committing to a right turn
+Dual-wall centering controller.
+
+  Both walls present  → PD to stay equidistant from left and right wall
+  Only right wall gone → go straight, no reaction
+  Only left wall gone  → go straight, no reaction
+  Both walls gone      → turn right (genuine open corner)
+
+This naturally ignores entranceways/windows on the right: the left wall
+stays present so no corner turn is triggered.
 """
 
 import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist, Vector3
+from geometry_msgs.msg import Twist
 
 
 # --- Tunable constants -------------------------------------------
-TARGET_DIST       = 0.90   # m — desired distance from right wall
-WALL_GONE_THRESH  = 3.0    # m — a ray is "open" if it reads beyond this
-WALL_GONE_FRAC    = 0.40   # fraction of wide-band rays that must be open to count as wall-gone
-WALL_GONE_BAND    = 80     # ± degrees around -90° for the wide wall-gone check
-WALL_GONE_SCANS   = 15     # consecutive scans before committing to right turn (1.5 s @ 10 Hz)
-TURNING_YAW_GATE  = 0.25   # rad/s — suppress wall-gone if |gyro_z| > this
-PD_DIST_CAP       = 1.5    # m — clamp right_dist in PD so large openings don't cause max steer
-FRONT_SLOW_THRESH = 0.8    # m — start slowing
-FRONT_STOP_THRESH = 0.45   # m — hard left turn
-RIGHT_CONE_DEG    = 60     # ± degrees around -90° for PD wall-distance rays
-FRONT_CONE_DEG    = 40     # ± degrees around 0° for front rays
+WALL_GONE_THRESH  = 1.8   # m — wall considered absent above this
+BOTH_GONE_SCANS   = 5     # consecutive scans with BOTH walls gone before turning right
+FRONT_SLOW_THRESH = 0.8   # m — start slowing
+FRONT_STOP_THRESH = 0.45  # m — hard left turn
+RIGHT_CONE_DEG    = 20    # ± degrees around -90° for right-wall rays
+LEFT_CONE_DEG     = 20    # ± degrees around +90° for left-wall rays
+FRONT_CONE_DEG    = 40    # ± degrees around 0° for front rays
 
 KP = 1.2
 KD = 0.4
 
 BASE_SPEED  = 0.40
-TURN_SPEED  = 0.20
-HARD_STEER  = 0.9
+TURN_SPEED  = 0.28
+HARD_STEER  = 1.6
 MAX_STEER   = 2.0
 # -----------------------------------------------------------------
 
-_SENSOR_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    durability=DurabilityPolicy.VOLATILE,
-    depth=10,
-)
-
-
-def _cone_indices_with_weights(angle_min, angle_increment, n_rays, center_deg, half_deg):
-    """Return (indices, cosine_weights) for rays within center_deg ± half_deg.
-    Rays perpendicular to the wall (closest to center_deg) are weighted highest.
-    """
-    center_rad = math.radians(center_deg)
-    half_rad = math.radians(half_deg)
-    lo = center_rad - half_rad
-    hi = center_rad + half_rad
-    indices = []
-    weights = []
-    for i in range(n_rays):
-        a = angle_min + i * angle_increment
-        if lo <= a <= hi:
-            indices.append(i)
-            # cos weight: 1.0 at center, 0.0 at edges
-            weights.append(math.cos((a - center_rad) / half_rad * math.pi / 2))
-    return indices, np.array(weights, dtype=np.float32)
-
 
 def _cone_indices(angle_min, angle_increment, n_rays, center_deg, half_deg):
-    idx, _ = _cone_indices_with_weights(angle_min, angle_increment, n_rays, center_deg, half_deg)
-    return idx
+    center_rad = math.radians(center_deg)
+    lo = center_rad - math.radians(half_deg)
+    hi = center_rad + math.radians(half_deg)
+    return [
+        i for i in range(n_rays)
+        if lo <= angle_min + i * angle_increment <= hi
+    ]
 
 
 class WallFollowerNode(Node):
@@ -76,68 +56,45 @@ class WallFollowerNode(Node):
 
         self._prev_error = 0.0
         self._last_scan_t = None
-        self._wall_gone_count = 0
-        self._gyro_z = 0.0         # latest yaw rate from IMU (rad/s)
-        self._in_right_turn = False
-        self._turn_accumulated = 0.0  # radians turned so far during hard right
-        self._turn_start_t = None
-        self._scan_count = 0
+        self._both_gone_count = 0
 
         self._right_idx = []
-        self._right_weights = np.array([])
+        self._left_idx = []
         self._front_idx = []
-        self._wide_idx = []   # wide band for wall-gone fraction check
         self._idx_computed = False
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self.create_subscription(LaserScan, "/scan", self._scan_cb, 10)
-        # IMU yaw rate — match rover_node's BEST_EFFORT QoS
-        self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _SENSOR_QOS)
 
-        self.get_logger().info(
-            f"Wall follower started — target {TARGET_DIST} m from right wall"
-        )
-
-    def _gyro_cb(self, msg: Vector3):
-        self._gyro_z = msg.z  # rad/s, positive = left yaw
+        self.get_logger().info("Dual-wall follower started")
 
     def _scan_cb(self, msg: LaserScan):
         n = len(msg.ranges)
 
         if not self._idx_computed:
-            self._right_idx, self._right_weights = _cone_indices_with_weights(
-                msg.angle_min, msg.angle_increment, n, -90, RIGHT_CONE_DEG
-            )
-            self._front_idx = _cone_indices(
-                msg.angle_min, msg.angle_increment, n, 0, FRONT_CONE_DEG
-            )
-            self._wide_idx = _cone_indices(
-                msg.angle_min, msg.angle_increment, n, -90, WALL_GONE_BAND
-            )
+            self._right_idx = _cone_indices(msg.angle_min, msg.angle_increment, n, -90, RIGHT_CONE_DEG)
+            self._left_idx  = _cone_indices(msg.angle_min, msg.angle_increment, n,  90, LEFT_CONE_DEG)
+            self._front_idx = _cone_indices(msg.angle_min, msg.angle_increment, n,   0, FRONT_CONE_DEG)
             self._idx_computed = True
             self.get_logger().info(
-                f"Ray cones: right={len(self._right_idx)} rays, "
-                f"front={len(self._front_idx)} rays, "
-                f"wide={len(self._wide_idx)} rays"
+                f"Ray cones: right={len(self._right_idx)}, "
+                f"left={len(self._left_idx)}, front={len(self._front_idx)}"
             )
 
         ranges = np.array(msg.ranges, dtype=np.float32)
 
-        def weighted_wall_dist(idx, weights):
-            """Cosine-weighted mean of valid right-wall rays."""
+        def valid_mean(idx):
             vals = ranges[idx]
-            valid = (vals > msg.range_min) & (vals < msg.range_max) & np.isfinite(vals)
-            if not valid.any():
-                return float(msg.range_max)
-            w = weights[valid]
-            return float(np.average(vals[valid], weights=w))
+            good = vals[(vals > msg.range_min) & (vals < msg.range_max) & np.isfinite(vals)]
+            return float(np.mean(good)) if len(good) > 0 else msg.range_max
 
         def valid_min(idx):
             vals = ranges[idx]
             good = vals[(vals > msg.range_min) & (vals < msg.range_max) & np.isfinite(vals)]
             return float(np.min(good)) if len(good) > 0 else msg.range_max
 
-        right_dist = weighted_wall_dist(self._right_idx, self._right_weights)
+        right_dist = valid_mean(self._right_idx)
+        left_dist  = valid_mean(self._left_idx)
         front_dist = valid_min(self._front_idx)
 
         now = self.get_clock().now()
@@ -148,60 +105,47 @@ class WallFollowerNode(Node):
 
         cmd = Twist()
 
-        # Front obstacle — hard left
+        # Front obstacle — turn left
         if front_dist < FRONT_STOP_THRESH:
-            cmd.linear.x = TURN_SPEED * 0.3
-            cmd.angular.z = -HARD_STEER
-            self._cmd_pub.publish(cmd)
-            self.get_logger().debug(f"FRONT OBSTACLE {front_dist:.2f} m — turning left")
-            return
-
-        # If currently executing a right turn, integrate gyro to track rotation.
-        # Exit once 90° accumulated or wall reappears.
-        if self._in_right_turn:
-            self._turn_accumulated += abs(self._gyro_z) * dt
-            if self._turn_accumulated >= math.pi / 2 or right_dist < WALL_GONE_THRESH:
-                self._in_right_turn = False
-                self._turn_accumulated = 0.0
-                self._wall_gone_count = 0
-                self.get_logger().info(
-                    f"Right turn complete — {math.degrees(self._turn_accumulated):.0f}° "
-                    f"turned, right_dist={right_dist:.2f}"
-                )
-                # Fall through to PD
-            else:
-                cmd.linear.x = TURN_SPEED
-                cmd.angular.z = HARD_STEER
-                self._cmd_pub.publish(cmd)
-                return
-
-        # Wall-gone: require WALL_GONE_FRAC of a wide band to be open.
-        # An entranceway opens a narrow slice; a real corner opens the whole right side.
-        wide_vals = ranges[self._wide_idx]
-        wide_valid = wide_vals[(wide_vals > msg.range_min) & np.isfinite(wide_vals)]
-        if len(wide_valid) > 0:
-            open_frac = float(np.mean(wide_valid > WALL_GONE_THRESH))
-        else:
-            open_frac = 0.0
-
-        if open_frac >= WALL_GONE_FRAC and abs(self._gyro_z) < TURNING_YAW_GATE:
-            self._wall_gone_count += 1
-        else:
-            self._wall_gone_count = 0
-
-        if self._wall_gone_count >= WALL_GONE_SCANS:
-            self._in_right_turn = True
-            self._turn_accumulated = 0.0
-            self._wall_gone_count = 0
-            self.get_logger().info("Starting right turn")
-            cmd.linear.x = TURN_SPEED
+            cmd.linear.x = TURN_SPEED * 0.5
             cmd.angular.z = HARD_STEER
             self._cmd_pub.publish(cmd)
+            self.get_logger().info(f"FRONT {front_dist:.2f}m — hard left")
             return
 
-        # PD wall follow — cap distance so large openings don't cause max steer
-        right_dist_pd = min(right_dist, PD_DIST_CAP)
-        error = right_dist_pd - TARGET_DIST
+        right_gone = right_dist > WALL_GONE_THRESH
+        left_gone  = left_dist  > WALL_GONE_THRESH
+
+        # Both walls gone — genuine open corner, turn right
+        if right_gone and left_gone:
+            self._both_gone_count += 1
+            if self._both_gone_count >= BOTH_GONE_SCANS:
+                cmd.linear.x = TURN_SPEED
+                cmd.angular.z = -HARD_STEER
+                self._cmd_pub.publish(cmd)
+                self.get_logger().info(
+                    f"BOTH WALLS GONE ({self._both_gone_count} scans) — turning right"
+                )
+                return
+            # Haven't confirmed yet — go straight
+            cmd.linear.x = BASE_SPEED
+            self._cmd_pub.publish(cmd)
+            return
+        else:
+            self._both_gone_count = 0
+
+        # Only one wall gone — go straight, no correction
+        if right_gone or left_gone:
+            cmd.linear.x = BASE_SPEED
+            self._cmd_pub.publish(cmd)
+            self.get_logger().info(
+                f"ONE WALL GONE  right={right_dist:.2f}  left={left_dist:.2f} — straight"
+            )
+            return
+
+        # Both walls present — center between them
+        # error > 0: right farther than left → too close to left → steer right (positive)
+        error = right_dist - left_dist
         d_error = (error - self._prev_error) / dt
         self._prev_error = error
 
@@ -216,17 +160,9 @@ class WallFollowerNode(Node):
         cmd.angular.z = steer
         self._cmd_pub.publish(cmd)
 
-        self._scan_count += 1
-        if self._scan_count % 5 == 0:
-            self.get_logger().info(
-                f"right={right_dist:.2f}m  open_frac={open_frac:.2f}  "
-                f"wall_gone_cnt={self._wall_gone_count}  "
-                f"gyro_z={self._gyro_z:.2f}  steer={steer:.2f}"
-            )
-
-        self.get_logger().debug(
-            f"right={right_dist:.2f} front={front_dist:.2f} "
-            f"err={error:.2f} steer={steer:.2f} gyro_z={self._gyro_z:.2f}"
+        self.get_logger().info(
+            f"right={right_dist:.2f}  left={left_dist:.2f}  "
+            f"err={error:.2f}  steer={steer:.2f}"
         )
 
 

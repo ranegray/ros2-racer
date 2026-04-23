@@ -149,7 +149,7 @@ class WallFollowerNode(Node):
     def _publish(self, cmd: Twist):
         """Apply mechanical steering trim then publish."""
         cmd.angular.z += STEERING_TRIM
-        self._publish(cmd)
+        self._cmd_pub.publish(cmd)
 
     def _gyro_cb(self, msg: Vector3):
         self._yaw_rate = msg.z

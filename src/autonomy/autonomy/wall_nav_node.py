@@ -66,6 +66,18 @@ class WallNavNode(Node):
         self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
+        # Sticky recovery: require this many consecutive valid scans
+        # before declaring wall recovered. Without stickiness, a brief
+        # valid scan in the middle of a spike-rejected burst (common
+        # during corner approach) resets `_lost_since` and the commit
+        # never fires. At ~8-10 Hz scan rate, 3 scans ≈ 0.3–0.4s.
+        self.declare_parameter("lost_recovery_scans", 3)
+        # Damping gain on measured yaw rate (rad/s) from imu/gyro.z. Applied
+        # in the REP-103 control frame (before the steering_sign flip), so
+        # a positive yaw rate (CCW / left) subtracts from `steering` to
+        # oppose current rotation — works alongside kd (error derivative)
+        # and k_alpha (wall-angle feedback).
+        self.declare_parameter("k_yaw", 0.00)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)

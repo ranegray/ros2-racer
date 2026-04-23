@@ -47,11 +47,15 @@ def generate_launch_description():
                               description="Rover wheelbase in metres"),
 
         # RPLIDAR A1 — publishes /scan with frame_id=laser
+        # respawn=True: LIDAR stays in scan mode after Ctrl+C; first attempt
+        # sends reset but times out, second attempt succeeds automatically.
         Node(
             package="rplidar_ros",
             executable="rplidar_node",
             name="rplidar_node",
             output="screen",
+            respawn=True,
+            respawn_delay=2.0,
             parameters=[{
                 "channel_type": "serial",
                 "serial_port": "/dev/ttyUSB0",

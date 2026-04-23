@@ -254,11 +254,12 @@ class WallFollowerNode(Node):
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 asymmetry = front_R - front_L
+                speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
                 if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
+                    # Angled wall (\ or /) — steer away from it
                     proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
                     avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
                     avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
-                    speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
                     cmd = Twist()
                     cmd.linear.x  = speed
                     cmd.angular.z = avoid_steer
@@ -268,7 +269,17 @@ class WallFollowerNode(Node):
                         f"L={front_L:.2f} R={front_R:.2f}  "
                         f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
                     )
-                    return
+                else:
+                    # Symmetric solid wall (--------) — always turn right
+                    cmd = Twist()
+                    cmd.linear.x  = speed
+                    cmd.angular.z = MAX_STEER  # full-lock RIGHT
+                    self._publish(cmd)
+                    self.get_logger().info(
+                        f"SOLID WALL ctr={center_dist:.2f}m  "
+                        f"L={front_L:.2f} R={front_R:.2f}  turning right"
+                    )
+                return
 
         # --- Spike detector ---
         is_spike = False

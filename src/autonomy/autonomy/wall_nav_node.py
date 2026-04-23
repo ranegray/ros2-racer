@@ -52,14 +52,6 @@ class WallNavNode(Node):
         self._last_valid_time = None
         # Latest IMU yaw rate (rad/s) for yaw-rate damping on the steering.
         self._yaw_rate = 0.0
-        # Integrated yaw from gyro.z. Absolute value is meaningless (no
-        # startup bias cal), but deltas over ~seconds are good enough to
-        # close the loop on the commit-turn exit condition.
-        self._yaw_integrated = 0.0
-        self._last_gyro_time = None
-        # Yaw-integral snapshot captured on the first scan of the turn
-        # phase. None when turn phase isn't active.
-        self._turn_yaw_entry = None
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
@@ -147,11 +139,6 @@ class WallNavNode(Node):
         self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
-        # Primary turn-exit condition: release the commit turn once the
-        # IMU has measured |Δyaw| ≥ this many degrees since turn entry.
-        # `commit_turn_s` remains as a safety cap. 80° leaves the last
-        # ~10° for PD to finish against the now-visible new right wall.
-        self.declare_parameter("turn_target_deg", 80.0)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common
@@ -163,7 +150,7 @@ class WallNavNode(Node):
         # a positive yaw rate (CCW / left) subtracts from `steering` to
         # oppose current rotation — works alongside kd (error derivative)
         # and k_alpha (wall-angle feedback).
-        self.declare_parameter("k_yaw", 0.15)
+        self.declare_parameter("k_yaw", 0.00)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -186,11 +173,6 @@ class WallNavNode(Node):
         )
 
     def gyro_callback(self, msg: Vector3):
-        now = self.get_clock().now().nanoseconds * 1e-9
-        if self._last_gyro_time is not None:
-            dt = now - self._last_gyro_time
-            self._yaw_integrated += msg.z * dt
-        self._last_gyro_time = now
         self._yaw_rate = msg.z
 
     @staticmethod
@@ -350,17 +332,14 @@ class WallNavNode(Node):
 
         # Wall lost: doorways/windows lose it briefly, right-turn corners
         # lose it permanently. Three phases:
-        #   coast   (0  ≤ t < lost_coast_s)             — short-gap guard
-        #   turn    (t ≥ lost_coast_s, |Δyaw| < target) — full-lock right
-        #   release (|Δyaw| ≥ target OR t ≥ turn_s cap) — hand back to PD
-        # IMU yaw-delta is the primary turn-exit condition; commit_turn_s
-        # is a safety cap if the gyro fails or the car stalls. If the
-        # wall is still missing the next scan, the cycle restarts.
+        #   coast   (0  ≤ t < lost_coast_s)        — handles short gaps
+        #   turn    (   lost_coast_s ≤ t < +turn_s) — fixed-duration ~90°
+        #   release (t ≥ lost_coast_s + turn_s)    — hand back to PD
+        # If the wall is still missing the next scan, the cycle restarts.
         if treat_as_lost:
             lost_for = now - self._lost_since
             coast_s = self.get_parameter("lost_coast_s").value
             turn_s = self.get_parameter("commit_turn_s").value
-            turn_target = math.radians(self.get_parameter("turn_target_deg").value)
 
             # Reset PD state so it doesn't spike when the wall returns.
             self._prev_error = 0.0
@@ -374,41 +353,31 @@ class WallNavNode(Node):
                 # Brief gap (doorway, window) — coast straight.
                 cmd.angular.z = float(bias)
                 mode = "coast"
-                self._turn_yaw_entry = None
-                yaw_delta = 0.0
+            elif lost_for < coast_s + turn_s:
+                # Execute the 90° right turn at full lock. Raw post-sign
+                # value (no flip, no clamp, no bias) — +2.0 = full-lock
+                # RIGHT on the inverted rover.
+                cmd.angular.z = float(self.get_parameter("lost_turn_steering").value)
+                mode = "turn"
             else:
-                # Commit-turn phase. Snapshot yaw on entry, then exit when
-                # |Δyaw| ≥ target or the time cap is reached.
-                if self._turn_yaw_entry is None:
-                    self._turn_yaw_entry = self._yaw_integrated
-                yaw_delta = abs(self._yaw_integrated - self._turn_yaw_entry)
-                time_cap_hit = lost_for >= coast_s + turn_s
-                if yaw_delta >= turn_target or time_cap_hit:
-                    cmd.angular.z = float(bias)
-                    mode = "release-yaw" if yaw_delta >= turn_target else "release-cap"
-                    self._lost_since = None
-                    self._valid_run = 0
-                    self._turn_yaw_entry = None
-                else:
-                    # Full-lock right. Raw post-sign value (no flip, no
-                    # clamp, no bias) — +2.0 = full-lock RIGHT on the
-                    # inverted rover.
-                    cmd.angular.z = float(
-                        self.get_parameter("lost_turn_steering").value
-                    )
-                    mode = "turn"
+                # Turn complete. Release the lost cycle. If the wall is
+                # still missing this scan we publish a brief straight so
+                # PD doesn't run on NaN; the next scan will start a fresh
+                # coast→turn cycle if still lost.
+                cmd.angular.z = float(bias)
+                mode = "release"
+                self._lost_since = None
+                self._valid_run = 0
 
             self.cmd_pub.publish(cmd)
             self.get_logger().info(
                 f"wall lost ({lost_for:.2f}s) {mode}: "
                 f"steer={cmd.angular.z:+.2f} v={v_min:.2f} "
-                f"Δyaw={math.degrees(yaw_delta):+.1f}° "
                 f"run={self._valid_run}/{recovery_scans}"
             )
             return
 
         self._lost_since = None
-        self._turn_yaw_entry = None
 
         target = self.get_parameter("target_distance").value
         kp = self.get_parameter("kp").value

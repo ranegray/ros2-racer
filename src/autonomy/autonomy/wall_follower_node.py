@@ -90,7 +90,7 @@ MAX_ERROR     = 0.4   # clip distance error before PD
 # SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
 # (positive angular.z = RIGHT on this rover, opposite REP-103)
 SIGN          = -1.0
-STEERING_TRIM =  0.1  # positive = trim right, negative = trim left (mechanical bias correction)
+STEERING_TRIM =  0.0  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
 BASE_SPEED    =  0.40  # m/s nominal
 TURN_SPEED    =  0.335  # m/s minimum (wall-lost / corners)

@@ -66,20 +66,20 @@ class WallNavNode(Node):
         # Note: on this robot `cmd_vel.angular.z` is a normalised STEERING
         # command (rover_node maps it as angular.z * 500 clipped to ±1000,
         # so ±2 = full lock). Gains are tuned for that, not for rad/s.
-        self.declare_parameter("kp", 1.5)
+        self.declare_parameter("kp", 0.8)
         self.declare_parameter("kd", 0.15)
         # α-feedback: counteracts the car's yaw toward/away from the wall
         # on straights AND helps drive turn-in as the wall starts bending
         # away through a corner. Final command:
         # sign * (kp·err + kd·dE − k_alpha·α).
-        self.declare_parameter("k_alpha", 2.2)
+        self.declare_parameter("k_alpha", 3.5)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
         # Distance error is clipped to ±max_error before PD. Stops the
         # controller from panic-saturating when the estimator briefly
         # reports an absurd distance (window, long recess, beam glitch).
-        self.declare_parameter("max_error", 0.7)
+        self.declare_parameter("max_error", 0.4)
         # Anything beyond this is treated as "no wall visible". This is
         # also the right-turn signal: the wall vanishes and stays gone.
         self.declare_parameter("max_plausible_distance", 4.0)
@@ -144,9 +144,14 @@ class WallNavNode(Node):
         # actual corner (otherwise the car drives several body-lengths
         # past the entrance before turning and ends up too deep in the
         # new corridor to make the turn cleanly).
-        self.declare_parameter("lost_coast_s", 0.15)
+        self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
-        self.declare_parameter("commit_turn_s", 2.7)
+        self.declare_parameter("commit_turn_s", 2.0)
+        # Primary turn-exit condition: release the commit turn once the
+        # IMU has measured |Δyaw| ≥ this many degrees since turn entry.
+        # `commit_turn_s` remains as a safety cap. 80° leaves the last
+        # ~10° for PD to finish against the now-visible new right wall.
+        self.declare_parameter("turn_target_deg", 80.0)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common

@@ -63,9 +63,11 @@ WALL_SAFE_DIST      =   1.0  # m — nudge away if remaining wall closer than th
 BALANCE_KP          =   0.3  # left-wall balance correction gain
 
 # Front safety
-FRONT_CONE_DEG      =    40  # ± degrees around 0° for front rays
-FRONT_SLOW_THRESH   =   0.8  # m — start slowing
-FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn
+FRONT_CONE_DEG      =    40  # ± degrees around 0° — wide cone for slowing only
+CENTER_CONE_DEG     =    15  # ± degrees around 0° — narrow cone for stop/avoid (ignores side walls)
+FRONT_SLOW_THRESH   =   0.8  # m — start slowing (wide cone)
+FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
+
 
 # Crash avoidance — steer away from angled approaching wall
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
@@ -122,6 +124,7 @@ class WallFollowerNode(Node):
         # Cone index caches (built on first scan)
         self._left_idx   = []
         self._front_idx  = []
+        self._center_idx = []
         self._idx_cached = False
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -201,11 +204,13 @@ class WallFollowerNode(Node):
 
         # Build cone caches once
         if not self._idx_cached:
-            self._left_idx  = self._cone_indices(msg,  90.0, LEFT_CONE_DEG)
-            self._front_idx = self._cone_indices(msg,   0.0, FRONT_CONE_DEG)
+            self._left_idx   = self._cone_indices(msg,  90.0, LEFT_CONE_DEG)
+            self._front_idx  = self._cone_indices(msg,   0.0, FRONT_CONE_DEG)
+            self._center_idx = self._cone_indices(msg,   0.0, CENTER_CONE_DEG)
             self._idx_cached = True
             self.get_logger().info(
-                f"Cone caches: left={len(self._left_idx)} front={len(self._front_idx)}"
+                f"Cone caches: left={len(self._left_idx)} "
+                f"front={len(self._front_idx)} center={len(self._center_idx)}"
             )
 
         ranges = np.array(msg.ranges, dtype=np.float32)
@@ -222,38 +227,38 @@ class WallFollowerNode(Node):
 
         now_s = self.get_clock().now().nanoseconds * 1e-9
 
-        left_dist  = cone_mean(self._left_idx)
-        front_dist = cone_min(self._front_idx)
+        left_dist   = cone_mean(self._left_idx)
+        front_dist  = cone_min(self._front_idx)   # wide — used for slowing only
+        center_dist = cone_min(self._center_idx)  # narrow — used for stop/avoid
         D_ahead, alpha = self._right_wall_state(msg)
 
-        # --- Emergency stop (fires regardless of wall state) ---
-        if front_dist < FRONT_STOP_THRESH:
+        # --- Emergency stop: only if straight-ahead (narrow) cone is blocked ---
+        if center_dist < FRONT_STOP_THRESH:
             cmd = Twist()
             cmd.linear.x  = TURN_SPEED * 0.5
             cmd.angular.z = -MAX_STEER   # hard LEFT (negative = left on this rover)
             self._cmd_pub.publish(cmd)
-            self.get_logger().info(f"EMERGENCY fwd={front_dist:.2f}m — hard left")
+            self.get_logger().info(f"EMERGENCY ctr={center_dist:.2f}m — hard left")
             return
 
         # --- Crash avoidance: steer away from angled approaching wall ---
-        # Fires before wall-state logic so it overrides coast/turn/PD.
-        if front_dist < FRONT_AVOID_THRESH:
+        # Uses narrow center_dist so a gap straight ahead won't trigger it.
+        if center_dist < FRONT_AVOID_THRESH:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 asymmetry = front_R - front_L
                 if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
-                    # Scale steer by proximity (0 at threshold, 1 at 0 m)
-                    proximity = 1.0 - front_dist / FRONT_AVOID_THRESH
+                    proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
                     avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
                     avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
-                    speed = max(TURN_SPEED, BASE_SPEED * (front_dist / FRONT_AVOID_THRESH))
+                    speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
                     cmd = Twist()
                     cmd.linear.x  = speed
                     cmd.angular.z = avoid_steer
                     self._cmd_pub.publish(cmd)
                     self.get_logger().info(
-                        f"AVOID fwd={front_dist:.2f}m  "
+                        f"AVOID ctr={center_dist:.2f}m  "
                         f"L={front_L:.2f} R={front_R:.2f}  "
                         f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
                     )
@@ -379,11 +384,14 @@ class WallFollowerNode(Node):
         steering = SIGN * pre_sign
         steering = max(-MAX_STEER, min(MAX_STEER, steering))
 
-        # Speed: ease off as wall angle grows; also slow for front obstacles
+        # Speed: ease off as wall angle grows; slow for anything in wide front cone
         alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
         speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
         if front_dist < FRONT_SLOW_THRESH:
             speed = max(TURN_SPEED, speed * front_dist / FRONT_SLOW_THRESH)
+        # Also slow if center is closer than slow threshold (gap scenario: wide is clear, center warns)
+        if center_dist < FRONT_SLOW_THRESH:
+            speed = max(TURN_SPEED, speed * center_dist / FRONT_SLOW_THRESH)
 
         cmd = Twist()
         cmd.linear.x  = speed

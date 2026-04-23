@@ -73,7 +73,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
-FRONT_AVOID_THRESH  =   0.7  # m — start applying angle correction
+FRONT_AVOID_THRESH  =   1.2  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
@@ -90,9 +90,10 @@ MAX_ERROR     = 0.4   # clip distance error before PD
 # SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
 # (positive angular.z = RIGHT on this rover, opposite REP-103)
 SIGN          = -1.0
+STEERING_TRIM =  0.1  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
 BASE_SPEED    =  0.40  # m/s nominal
-TURN_SPEED    =  0.28  # m/s minimum (wall-lost / corners)
+TURN_SPEED    =  0.32  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 45.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 
@@ -144,6 +145,11 @@ class WallFollowerNode(Node):
     # ------------------------------------------------------------------
     # IMU callback
     # ------------------------------------------------------------------
+
+    def _publish(self, cmd: Twist):
+        """Apply mechanical steering trim then publish."""
+        cmd.angular.z += STEERING_TRIM
+        self._publish(cmd)
 
     def _gyro_cb(self, msg: Vector3):
         self._yaw_rate = msg.z
@@ -237,7 +243,7 @@ class WallFollowerNode(Node):
             cmd = Twist()
             cmd.linear.x  = TURN_SPEED * 0.5
             cmd.angular.z = -MAX_STEER   # hard LEFT (negative = left on this rover)
-            self._cmd_pub.publish(cmd)
+            self._publish(cmd)
             self.get_logger().info(f"EMERGENCY ctr={center_dist:.2f}m — hard left")
             return
 
@@ -256,7 +262,7 @@ class WallFollowerNode(Node):
                     cmd = Twist()
                     cmd.linear.x  = speed
                     cmd.angular.z = avoid_steer
-                    self._cmd_pub.publish(cmd)
+                    self._publish(cmd)
                     self.get_logger().info(
                         f"AVOID ctr={center_dist:.2f}m  "
                         f"L={front_L:.2f} R={front_R:.2f}  "
@@ -333,7 +339,7 @@ class WallFollowerNode(Node):
                 self._both_lost_since = None
                 mode = "release"
 
-            self._cmd_pub.publish(cmd)
+            self._publish(cmd)
             self.get_logger().info(
                 f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
             )
@@ -352,7 +358,7 @@ class WallFollowerNode(Node):
             cmd = Twist()
             cmd.linear.x  = BASE_SPEED
             cmd.angular.z = steer
-            self._cmd_pub.publish(cmd)
+            self._publish(cmd)
             self.get_logger().info(
                 f"RIGHT GONE  left={left_dist:.2f}  steer={steer:.2f}"
             )
@@ -384,19 +390,16 @@ class WallFollowerNode(Node):
         steering = SIGN * pre_sign
         steering = max(-MAX_STEER, min(MAX_STEER, steering))
 
-        # Speed: ease off as wall angle grows; slow for anything in wide front cone
+        # Speed: ease off as wall angle grows; only slow for things directly ahead (center cone)
         alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
         speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
-        if front_dist < FRONT_SLOW_THRESH:
-            speed = max(TURN_SPEED, speed * front_dist / FRONT_SLOW_THRESH)
-        # Also slow if center is closer than slow threshold (gap scenario: wide is clear, center warns)
         if center_dist < FRONT_SLOW_THRESH:
             speed = max(TURN_SPEED, speed * center_dist / FRONT_SLOW_THRESH)
 
         cmd = Twist()
         cmd.linear.x  = speed
         cmd.angular.z = steering
-        self._cmd_pub.publish(cmd)
+        self._publish(cmd)
 
         tag = "F1TENTH+bal" if not left_gone else "F1TENTH"
         self.get_logger().info(

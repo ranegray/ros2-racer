@@ -322,24 +322,21 @@ class WallNavNode(Node):
             self._last_valid_alpha = None
             self._last_valid_time = None
 
-        # Wall-lost is a GEOMETRIC determination only: perp beam gone
-        # (NaN) or D absurd. A spike means "this measurement is
-        # untrustworthy," NOT "the wall has disappeared" — so spikes
-        # must NOT advance the lost timer. Coupling them used to let
-        # a window-glint burst fire a spurious corner commit mid-hallway.
-        wall_lost_now = (not math.isfinite(D_ahead)) or D_ahead > max_plausible
+        # Current-frame wall-lost determination.
+        wall_lost_now = (
+            (not math.isfinite(D_ahead)) or D_ahead > max_plausible or is_spike
+        )
 
-        # Sticky recovery: require N consecutive wall-present scans to
-        # clear lost state. Spikes are neutral — they neither reset
-        # nor advance the run, so a spike burst during true wall-loss
-        # can't masquerade as recovery, and a spike on a visible wall
-        # doesn't kick us into lost mode.
+        # Sticky recovery: a single valid scan does NOT end lost mode.
+        # During corner approach the spike detector rejects legitimate
+        # fast α swings as "spikes" — and the brief valid scans between
+        # those rejections used to reset `_lost_since`, which meant the
+        # commit never had time to fire. Now we require N consecutive
+        # valid scans before clearing lost state.
         if wall_lost_now:
             self._valid_run = 0
             if self._lost_since is None:
                 self._lost_since = now
-        elif is_spike:
-            pass
         else:
             self._valid_run += 1
 
@@ -421,24 +418,10 @@ class WallNavNode(Node):
         d_alpha = self.get_parameter("d_error_alpha").value
         max_error = self.get_parameter("max_error").value
 
-        # Spike with wall still visible: fall back to the last trusted
-        # (D, α) for this scan's PD rather than treating the bad sample
-        # as truth. If we don't have recent valid history, skip the PD
-        # this scan entirely (hold previous command via no publish).
-        if is_spike:
-            if self._last_valid_D is not None:
-                D_ahead = self._last_valid_D
-                alpha = self._last_valid_alpha
-            else:
-                self.get_logger().info(
-                    "spike with no valid history — skipping PD this scan"
-                )
-                return
-        else:
-            # Non-spike, non-lost scan accepted — record as new reference.
-            self._last_valid_D = D_ahead
-            self._last_valid_alpha = alpha
-            self._last_valid_time = now
+        # Scan accepted — record it as the new reference for spike detection.
+        self._last_valid_D = D_ahead
+        self._last_valid_alpha = alpha
+        self._last_valid_time = now
 
         # Positive error => too close to the wall => steer left (+angular.z).
         # Clip before the PD so a single outlier reading can't send the

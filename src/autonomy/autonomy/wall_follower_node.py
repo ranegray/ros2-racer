@@ -93,7 +93,7 @@ SIGN          = -1.0
 STEERING_TRIM =  0.1  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
 BASE_SPEED    =  0.40  # m/s nominal
-TURN_SPEED    =  0.32  # m/s minimum (wall-lost / corners)
+TURN_SPEED    =  0.36  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 45.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 

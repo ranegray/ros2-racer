@@ -95,7 +95,7 @@ class WallNavNode(Node):
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.45)
-        self.declare_parameter("target_distance", 0.8)
+        self.declare_parameter("target_distance", 0.5)
         self.declare_parameter("forward_speed", 0.5)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0°), REP-103 convention: +CCW, so the right wall

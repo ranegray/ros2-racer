@@ -143,12 +143,67 @@ class WallNavNode(Node):
             self.cmd_pub.publish(Twist())
             return
 
-        wall_lost = (not math.isfinite(D)) or D > max_plausible
+        # Spike detector: reject a scan whose (D_ahead, α) jumped farther
+        # than physically possible from the last valid reading. Prevents
+        # a window from masquerading as a corner entry.
+        stale_s = self.get_parameter("spike_stale_s").value
+        max_d_jump = self.get_parameter("max_d_jump").value
+        max_alpha_jump = math.radians(self.get_parameter("max_alpha_jump_deg").value)
+        is_spike = False
+        if (
+            math.isfinite(D_ahead)
+            and self._last_valid_time is not None
+            and (now - self._last_valid_time) < stale_s
+        ):
+            dD = abs(D_ahead - self._last_valid_D)
+            da = abs(alpha - self._last_valid_alpha)
+            if dD > max_d_jump or da > max_alpha_jump:
+                is_spike = True
+                self.get_logger().info(
+                    f"spike rejected: ΔD={dD:.2f}m Δα={math.degrees(da):+.1f}°"
+                )
+        # Invalidate stale history so we don't compare the next valid
+        # scan against an outdated (D, α).
+        if (
+            self._last_valid_time is not None
+            and (now - self._last_valid_time) >= stale_s
+        ):
+            self._last_valid_D = None
+            self._last_valid_alpha = None
+            self._last_valid_time = None
 
-        # Lost-wall cycle: coast → turn → release.
-        if wall_lost:
+        # Current-frame wall-lost determination.
+        wall_lost_now = (
+            (not math.isfinite(D_ahead)) or D_ahead > max_plausible or is_spike
+        )
+
+        # Sticky recovery: a single valid scan does NOT end lost mode.
+        # During corner approach the spike detector rejects legitimate
+        # fast α swings as "spikes" — and the brief valid scans between
+        # those rejections used to reset `_lost_since`, which meant the
+        # commit never had time to fire. Now we require N consecutive
+        # valid scans before clearing lost state.
+        if wall_lost_now:
+            self._valid_run = 0
             if self._lost_since is None:
                 self._lost_since = now
+        else:
+            self._valid_run += 1
+
+        recovery_scans = self.get_parameter("lost_recovery_scans").value
+        treat_as_lost = wall_lost_now or (
+            self._lost_since is not None and self._valid_run < recovery_scans
+        )
+
+        # Wall lost: doorways/windows lose it briefly, right-turn corners
+        # lose it permanently. Three phases:
+        #   coast   (0  ≤ t < lost_coast_s)             — short-gap guard
+        #   turn    (t ≥ lost_coast_s, |Δyaw| < target) — full-lock right
+        #   release (|Δyaw| ≥ target OR t ≥ turn_s cap) — hand back to PD
+        # IMU yaw-delta is the primary turn-exit condition; commit_turn_s
+        # is a safety cap if the gyro fails or the car stalls. If the
+        # wall is still missing the next scan, the cycle restarts.
+        if treat_as_lost:
             lost_for = now - self._lost_since
             coast_s = self.get_parameter("lost_coast_s").value
             turn_s = self.get_parameter("commit_turn_s").value
@@ -187,9 +242,15 @@ class WallNavNode(Node):
         v = self.get_parameter("forward_speed").value
         max_error = self.get_parameter("max_error").value
 
-        # Positive error => too close to the wall => steer left (+angular.z
-        # in REP-103). Clip before PD.
-        error = target - D
+        # Scan accepted — record it as the new reference for spike detection.
+        self._last_valid_D = D_ahead
+        self._last_valid_alpha = alpha
+        self._last_valid_time = now
+
+        # Positive error => too close to the wall => steer left (+angular.z).
+        # Clip before the PD so a single outlier reading can't send the
+        # gains to full lock.
+        error = target - D_ahead
         error = max(-max_error, min(max_error, error))
 
         if self._prev_time is None:

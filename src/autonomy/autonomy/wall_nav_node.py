@@ -150,7 +150,7 @@ class WallNavNode(Node):
         # a positive yaw rate (CCW / left) subtracts from `steering` to
         # oppose current rotation — works alongside kd (error derivative)
         # and k_alpha (wall-angle feedback).
-        self.declare_parameter("k_yaw", 0.15)
+        self.declare_parameter("k_yaw", 0.00)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)

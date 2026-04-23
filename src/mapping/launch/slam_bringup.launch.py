@@ -1,3 +1,4 @@
+import os
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration, PythonExpression
@@ -25,6 +26,11 @@ def generate_launch_description():
         description='Baud rate for the RPLiDAR serial connection',
     )
 
+    #rviz_config_dir = os.path.join('/mnt/ADVROBO_Final/ros2-racer/src/mapping/config/rplidar_ros.rviz')
+
+    rviz_config_dir = os.path.join(os.getcwd(), 'src/mapping/config/rplidar_ros.rviz')
+    print(rviz_config_dir)
+
     return LaunchDescription([
         lidar_port_arg,
         lidar_baudrate_arg,
@@ -41,9 +47,10 @@ def generate_launch_description():
         ),
         Node(
             package='rviz2',
-            namespace=rviz2_map,
             executable='rviz2',
-            name='sim'
+            name='rviz2',
+            arguments=['-d', rviz_config_dir],
+            output='screen'
         ),
         Node(
             package='rplidar_ros',

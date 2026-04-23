@@ -67,6 +67,15 @@ FRONT_CONE_DEG      =    40  # ± degrees around 0° for front rays
 FRONT_SLOW_THRESH   =   0.8  # m — start slowing
 FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn
 
+# Crash avoidance — steer away from angled approaching wall
+# Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
+#   front_R - front_L > 0  →  wall like \  →  steer right (positive)
+#   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
+FRONT_AVOID_THRESH  =   1.0  # m — start applying angle correction
+FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
+FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
+FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
+
 # PD + feedback gains
 KP            = 0.8
 KD            = 0.15
@@ -225,6 +234,30 @@ class WallFollowerNode(Node):
             self._cmd_pub.publish(cmd)
             self.get_logger().info(f"EMERGENCY fwd={front_dist:.2f}m — hard left")
             return
+
+        # --- Crash avoidance: steer away from angled approaching wall ---
+        # Fires before wall-state logic so it overrides coast/turn/PD.
+        if front_dist < FRONT_AVOID_THRESH:
+            front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
+            front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
+            if math.isfinite(front_L) and math.isfinite(front_R):
+                asymmetry = front_R - front_L
+                if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
+                    # Scale steer by proximity (0 at threshold, 1 at 0 m)
+                    proximity = 1.0 - front_dist / FRONT_AVOID_THRESH
+                    avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
+                    avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
+                    speed = max(TURN_SPEED, BASE_SPEED * (front_dist / FRONT_AVOID_THRESH))
+                    cmd = Twist()
+                    cmd.linear.x  = speed
+                    cmd.angular.z = avoid_steer
+                    self._cmd_pub.publish(cmd)
+                    self.get_logger().info(
+                        f"AVOID fwd={front_dist:.2f}m  "
+                        f"L={front_L:.2f} R={front_R:.2f}  "
+                        f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
+                    )
+                    return
 
         # --- Spike detector ---
         is_spike = False

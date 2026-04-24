@@ -68,7 +68,7 @@ BALANCE_KP          =   0.3  # left-wall balance correction gain
 FRONT_CONE_DEG      =    40  # ± degrees around 0° — wide cone for slowing only
 CENTER_CONE_DEG     =    15  # ± degrees around 0° — narrow cone for stop/avoid (ignores side walls)
 FRONT_SLOW_THRESH   =   0.8  # m — start slowing (wide cone)
-FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
+FRONT_STOP_THRESH   =  0.20  # m — hard emergency turn (narrow cone only)
 
 
 # Crash avoidance — steer away from angled approaching wall

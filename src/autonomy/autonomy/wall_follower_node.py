@@ -408,17 +408,27 @@ class WallFollowerNode(Node):
         # CASE 2: Only right wall gone → entranceway, go straight
         # ==============================================================
         if right_gone:
-            steer = 0.0
-            if left_dist < WALL_SAFE_DIST:
-                steer = KP * (WALL_SAFE_DIST - left_dist)
-                steer = min(steer, MAX_STEER)
-            cmd = Twist()
-            cmd.linear.x  = BASE_SPEED
-            cmd.angular.z = steer
-            self._publish(cmd)
-            self.get_logger().info(
-                f"RIGHT GONE  left={left_dist:.2f}  steer={steer:.2f}"
-            )
+            if center_dist < FRONT_AVOID_THRESH:
+                # Wall ahead while right is gone → right turn corner, not entranceway
+                cmd = Twist()
+                cmd.linear.x  = TURN_SPEED
+                cmd.angular.z = MAX_STEER
+                self._publish(cmd)
+                self.get_logger().info(
+                    f"RIGHT GONE+CORNER  ctr={center_dist:.2f}  left={left_dist:.2f}  turning right"
+                )
+            else:
+                steer = 0.0
+                if left_dist < WALL_SAFE_DIST:
+                    steer = KP * (WALL_SAFE_DIST - left_dist)
+                    steer = min(steer, MAX_STEER)
+                cmd = Twist()
+                cmd.linear.x  = BASE_SPEED
+                cmd.angular.z = steer
+                self._publish(cmd)
+                self.get_logger().info(
+                    f"RIGHT GONE  left={left_dist:.2f}  steer={steer:.2f}"
+                )
             return
 
         # ==============================================================

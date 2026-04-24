@@ -80,7 +80,9 @@ FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
 # Ray > N × centre_dist means it passed through a gap — skip AVOID entirely
-FRONT_AVOID_MAX_DIAG_MULT = 3.0
+# Only applies when far enough from wall; close in, AVOID must always engage
+FRONT_AVOID_MAX_DIAG_MULT   = 3.0
+FRONT_AVOID_MIN_GAP_DIST    = 1.2  # m — below this, gap skip is disabled
 
 # PD + feedback gains
 KP            = 0.8
@@ -300,7 +302,7 @@ class WallFollowerNode(Node):
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
-                if front_L > max_diag or front_R > max_diag:
+                if center_dist > FRONT_AVOID_MIN_GAP_DIST and (front_L > max_diag or front_R > max_diag):
                     # A diagonal went through a gap (window / doorway).
                     # Asymmetry is garbage — skip AVOID, fall through to wall-following.
                     self.get_logger().info(

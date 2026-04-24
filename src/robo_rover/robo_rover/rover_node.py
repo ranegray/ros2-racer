@@ -324,19 +324,21 @@ class ArduPilotRoverNode(Node):
         armed_msg.data = self.armed
         self.armed_pub.publish(armed_msg)
         
-        # Check connection health
+        # Check connection health — drain all pending messages and dispatch by type
         if self.connected:
-            heartbeat = self.master.recv_match(type='HEARTBEAT', blocking=False)
-            if heartbeat is not None:
-                self.armed = bool(heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-
-            sys_status = self.master.recv_match(type='SYS_STATUS', blocking=False)
-            if sys_status is not None:
-                voltage_v = sys_status.voltage_battery / 1000.0  # mV → V
-                msg = Float32()
-                msg.data = voltage_v
-                self.battery_pub.publish(msg)
-                self.get_logger().info(f'Battery: {voltage_v:.2f}V')
+            for _ in range(50):
+                msg = self.master.recv_match(blocking=False)
+                if msg is None:
+                    break
+                msg_type = msg.get_type()
+                if msg_type == 'HEARTBEAT':
+                    self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                elif msg_type == 'SYS_STATUS':
+                    voltage_v = msg.voltage_battery / 1000.0  # mV → V
+                    batt_msg = Float32()
+                    batt_msg.data = voltage_v
+                    self.battery_pub.publish(batt_msg)
+                    self.get_logger().info(f'Battery: {voltage_v:.2f}V')
     
     def destroy_node(self):
         """Clean up when node is destroyed"""

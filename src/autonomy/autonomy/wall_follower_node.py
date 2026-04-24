@@ -241,11 +241,22 @@ class WallFollowerNode(Node):
 
         # --- Emergency stop: only if straight-ahead (narrow) cone is blocked ---
         if center_dist < FRONT_STOP_THRESH:
+            front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
+            front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
+            # Turn toward the open side; default right if can't determine
+            if math.isfinite(front_L) and math.isfinite(front_R) and front_L > front_R:
+                e_steer = -MAX_STEER  # left more open → turn left
+                side = "left"
+            else:
+                e_steer = MAX_STEER   # right more open (or unknown) → turn right
+                side = "right"
             cmd = Twist()
             cmd.linear.x  = TURN_SPEED * 0.5
-            cmd.angular.z = -MAX_STEER   # hard LEFT (negative = left on this rover)
+            cmd.angular.z = e_steer
             self._publish(cmd)
-            self.get_logger().info(f"EMERGENCY ctr={center_dist:.2f}m — hard left")
+            self.get_logger().info(
+                f"EMERGENCY ctr={center_dist:.2f}m L={front_L:.2f} R={front_R:.2f} — hard {side}"
+            )
             return
 
         # --- Crash avoidance: steer away from angled approaching wall ---

@@ -26,10 +26,9 @@ def generate_launch_description():
         description='Baud rate for the RPLiDAR serial connection',
     )
 
-    #rviz_config_dir = os.path.join('/mnt/ADVROBO_Final/ros2-racer/src/mapping/config/rplidar_ros.rviz')
+
 
     rviz_config_dir = os.path.join(os.getcwd(), 'src/mapping/config/rplidar_ros.rviz')
-    print(rviz_config_dir)
 
     return LaunchDescription([
         lidar_port_arg,

@@ -132,8 +132,9 @@ class WallFollowerNode(Node):
         # IMU yaw rate (rad/s)
         self._yaw_rate = 0.0
 
-        # Battery voltage (V) — None until first message received
-        self._battery_voltage = None
+        # Battery — None until first message received
+        self._battery_voltage   = None
+        self._battery_remaining = None   # 0-100 % from ArduPilot coulomb counter
 
         # Cone index caches (built on first scan)
         self._left_idx   = []
@@ -153,6 +154,7 @@ class WallFollowerNode(Node):
         )
         self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _sensor_qos)
         self.create_subscription(Float32, "/rover/battery_voltage", self._battery_cb, _sensor_qos)
+        self.create_subscription(Float32, "/rover/battery_remaining", self._battery_pct_cb, _sensor_qos)
 
         self.get_logger().info("Hybrid F1TENTH+dual-wall follower started")
 
@@ -171,14 +173,21 @@ class WallFollowerNode(Node):
     def _battery_cb(self, msg: Float32):
         self._battery_voltage = msg.data
 
+    def _battery_pct_cb(self, msg: Float32):
+        self._battery_remaining = msg.data
+
     def _voltage_scale(self) -> float:
-        """Return gain multiplier based on battery voltage.
-        scale=1.0 at NOMINAL_VOLTAGE, increases as voltage drops."""
+        """Return speed gain multiplier to compensate for battery drain.
+        Uses coulomb-counter percentage (linear 1.0→MAX at 100%→0%).
+        Falls back to voltage ratio if percentage unavailable."""
+        if self._battery_remaining is not None and self._battery_remaining >= 0:
+            pct = max(0.0, min(100.0, self._battery_remaining))
+            scale = 1.0 + (MAX_VOLTAGE_SCALE - 1.0) * (1.0 - pct / 100.0)
+            return scale
         if self._battery_voltage is None:
             return 1.0
         v = max(self._battery_voltage, MIN_VOLTAGE)
-        scale = NOMINAL_VOLTAGE / v
-        return min(scale, MAX_VOLTAGE_SCALE)
+        return min(NOMINAL_VOLTAGE / v, MAX_VOLTAGE_SCALE)
 
     # ------------------------------------------------------------------
     # Geometry helpers

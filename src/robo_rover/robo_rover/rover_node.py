@@ -64,6 +64,7 @@ class ArduPilotRoverNode(Node):
         self.accel_pub = self.create_publisher(Vector3, 'imu/accel', sensor_qos)
         self.armed_pub = self.create_publisher(Bool, 'rover/armed', control_qos)
         self.battery_pub = self.create_publisher(Float32, 'rover/battery_voltage', sensor_qos)
+        self.battery_pct_pub = self.create_publisher(Float32, 'rover/battery_remaining', sensor_qos)
         
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -307,7 +308,12 @@ class ArduPilotRoverNode(Node):
                 batt_msg = Float32()
                 batt_msg.data = voltage_v
                 self.battery_pub.publish(batt_msg)
-                self.get_logger().info(f'Battery: {voltage_v:.2f}V')
+                pct = msg.battery_remaining  # int8: -1=unknown, 0-100
+                if pct >= 0:
+                    pct_msg = Float32()
+                    pct_msg.data = float(pct)
+                    self.battery_pct_pub.publish(pct_msg)
+                self.get_logger().info(f'Battery: {voltage_v:.2f}V  {pct}%')
             elif msg_type == 'HEARTBEAT':
                 self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
     

@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 import time
 import threading
 from pymavlink import mavutil
@@ -63,6 +63,7 @@ class ArduPilotRoverNode(Node):
         self.gyro_pub = self.create_publisher(Vector3, 'imu/gyro', sensor_qos)
         self.accel_pub = self.create_publisher(Vector3, 'imu/accel', sensor_qos)
         self.armed_pub = self.create_publisher(Bool, 'rover/armed', control_qos)
+        self.battery_pub = self.create_publisher(Float32, 'rover/battery_voltage', sensor_qos)
         
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -220,7 +221,18 @@ class ArduPilotRoverNode(Node):
             )
             
             self.get_logger().info(f'Requested IMU data at {self.imu_freq} Hz')
-            
+
+            # Request SYS_STATUS (msg ID 1) at 1 Hz for battery voltage
+            self.master.mav.command_long_send(
+                self.master.target_system,
+                self.master.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                1,        # SYS_STATUS message ID
+                1000000,  # 1 Hz
+                0, 0, 0, 0, 0
+            )
+
         except Exception as e:
             self.get_logger().error(f'Failed to request IMU data: {e}')
     
@@ -316,8 +328,15 @@ class ArduPilotRoverNode(Node):
         if self.connected:
             heartbeat = self.master.recv_match(type='HEARTBEAT', blocking=False)
             if heartbeat is not None:
-                # Update armed status from heartbeat
                 self.armed = bool(heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+            sys_status = self.master.recv_match(type='SYS_STATUS', blocking=False)
+            if sys_status is not None:
+                voltage_v = sys_status.voltage_battery / 1000.0  # mV → V
+                msg = Float32()
+                msg.data = voltage_v
+                self.battery_pub.publish(msg)
+                self.get_logger().info(f'Battery: {voltage_v:.2f}V')
     
     def destroy_node(self):
         """Clean up when node is destroyed"""

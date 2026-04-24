@@ -34,6 +34,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist, Vector3
+from std_msgs.msg import Float32
 
 
 # --- Tunable constants -------------------------------------------
@@ -96,6 +97,12 @@ MAX_STEER     =  2.0  # ±2.0 = full servo lock
 BASE_SPEED    =  0.40  # m/s nominal
 TURN_SPEED    =  0.33  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
+
+# Battery voltage scaling
+# Gains were tuned at NOMINAL_VOLTAGE. Below that, scale up to compensate for weaker motors.
+NOMINAL_VOLTAGE   =  7.4  # V — 2S LiPo nominal (gains tuned here)
+MIN_VOLTAGE       =  6.8  # V — floor ~3.4V/cell; don't scale beyond MAX_VOLTAGE_SCALE
+MAX_VOLTAGE_SCALE =  1.3  # hard cap on gain multiplier (~8.4V full → 7.4V nominal = 1.14×)
 # -----------------------------------------------------------------
 
 
@@ -123,6 +130,9 @@ class WallFollowerNode(Node):
         # IMU yaw rate (rad/s)
         self._yaw_rate = 0.0
 
+        # Battery voltage (V) — None until first message received
+        self._battery_voltage = None
+
         # Cone index caches (built on first scan)
         self._left_idx   = []
         self._front_idx  = []
@@ -140,6 +150,7 @@ class WallFollowerNode(Node):
             depth=10,
         )
         self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _sensor_qos)
+        self.create_subscription(Float32, "/rover/battery_voltage", self._battery_cb, _sensor_qos)
 
         self.get_logger().info("Hybrid F1TENTH+dual-wall follower started")
 
@@ -154,6 +165,18 @@ class WallFollowerNode(Node):
 
     def _gyro_cb(self, msg: Vector3):
         self._yaw_rate = msg.z
+
+    def _battery_cb(self, msg: Float32):
+        self._battery_voltage = msg.data
+
+    def _voltage_scale(self) -> float:
+        """Return gain multiplier based on battery voltage.
+        scale=1.0 at NOMINAL_VOLTAGE, increases as voltage drops."""
+        if self._battery_voltage is None:
+            return 1.0
+        v = max(self._battery_voltage, MIN_VOLTAGE)
+        scale = NOMINAL_VOLTAGE / v
+        return min(scale, MAX_VOLTAGE_SCALE)
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -403,8 +426,11 @@ class WallFollowerNode(Node):
         self._prev_d_error = d_error
         self._prev_time    = now_s
 
+        # Battery voltage scaling — boost gains when voltage is low
+        vs = self._voltage_scale()
+
         # Pre-sign: PD + alpha-feedback + IMU yaw damping
-        pre_sign = KP * error + KD * d_error - K_ALPHA * alpha - K_YAW * self._yaw_rate
+        pre_sign = (KP * vs) * error + (KD * vs) * d_error - (K_ALPHA * vs) * alpha - K_YAW * self._yaw_rate
 
         # Left-wall balance: when right is farther than left (drifted left), push right
         if not left_gone:
@@ -415,7 +441,8 @@ class WallFollowerNode(Node):
 
         # Speed: ease off as wall angle grows; only slow for things directly ahead (center cone)
         alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
-        speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
+        speed = max(TURN_SPEED * vs, BASE_SPEED * vs * max(0.0, 1.0 - abs(alpha) / alpha_scale))
+        speed = min(speed, BASE_SPEED * MAX_VOLTAGE_SCALE)  # cap speed scaling
         if center_dist < FRONT_SLOW_THRESH:
             speed = max(TURN_SPEED, speed * center_dist / FRONT_SLOW_THRESH)
 
@@ -425,9 +452,11 @@ class WallFollowerNode(Node):
         self._publish(cmd)
 
         tag = "F1TENTH+bal" if not left_gone else "F1TENTH"
+        v_str = f" V={self._battery_voltage:.1f}" if self._battery_voltage else ""
         self.get_logger().info(
             f"{tag}  D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}°  "
             f"left={left_dist:.2f}  err={error:+.2f}  steer={steering:+.2f}  v={speed:.2f}"
+            f"  scale={vs:.2f}{v_str}"
         )
 
 

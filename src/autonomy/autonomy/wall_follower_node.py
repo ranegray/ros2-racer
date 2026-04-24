@@ -77,7 +77,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 FRONT_AVOID_THRESH  =   2.5  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP      =   4.0  # gain on asymmetry → steer correction
+FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
 
 # PD + feedback gains
 KP            = 0.8

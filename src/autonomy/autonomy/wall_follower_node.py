@@ -186,16 +186,21 @@ class WallFollowerNode(Node):
 
     def _voltage_scale(self) -> float:
         """Return speed gain multiplier to compensate for battery drain.
-        Uses coulomb-counter percentage (linear 1.0→MAX at 100%→0%).
-        Falls back to voltage ratio if percentage unavailable."""
+        Takes the MINIMUM of voltage-scale and percentage-scale.
+        Voltage wins on fresh batteries (8.45V → scale≈1.0) even if the
+        coulomb counter shows a stale low-% from the previous battery pack.
+        Under load, voltage sags → voltage scale rises and tracks drain."""
+        v_scale = 1.0
+        if self._battery_voltage is not None:
+            v = max(self._battery_voltage, MIN_VOLTAGE)
+            v_scale = min(NOMINAL_VOLTAGE / v, MAX_VOLTAGE_SCALE)
+
+        pct_scale = MAX_VOLTAGE_SCALE  # assume worst case until we know
         if self._battery_remaining is not None and self._battery_remaining >= 0:
             pct = max(0.0, min(100.0, self._battery_remaining))
-            scale = 1.0 + (MAX_VOLTAGE_SCALE - 1.0) * (1.0 - pct / 100.0)
-            return scale
-        if self._battery_voltage is None:
-            return 1.0
-        v = max(self._battery_voltage, MIN_VOLTAGE)
-        return min(NOMINAL_VOLTAGE / v, MAX_VOLTAGE_SCALE)
+            pct_scale = 1.0 + (MAX_VOLTAGE_SCALE - 1.0) * (1.0 - pct / 100.0)
+
+        return min(v_scale, pct_scale)
 
     # ------------------------------------------------------------------
     # Geometry helpers

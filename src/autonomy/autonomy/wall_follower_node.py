@@ -100,9 +100,9 @@ SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 
 # Battery voltage scaling
 # Gains were tuned at NOMINAL_VOLTAGE. Below that, scale up to compensate for weaker motors.
-NOMINAL_VOLTAGE   =  7.4  # V — 2S LiPo nominal (gains tuned here)
+NOMINAL_VOLTAGE   =  8.4  # V — 2S LiPo full charge (gains tuned at full charge)
 MIN_VOLTAGE       =  6.8  # V — floor ~3.4V/cell; don't scale beyond MAX_VOLTAGE_SCALE
-MAX_VOLTAGE_SCALE =  1.3  # hard cap on gain multiplier (~8.4V full → 7.4V nominal = 1.14×)
+MAX_VOLTAGE_SCALE =  1.3  # hard cap on gain multiplier (8.4V→6.8V = 1.24×)
 # -----------------------------------------------------------------
 
 

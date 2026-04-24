@@ -291,15 +291,25 @@ class ArduPilotRoverNode(Node):
             self.get_logger().error(f'Failed to send control command: {e}')
     
     def imu_loop(self):
-        """IMU data processing loop"""
+        """Read all pending MAVLink messages and dispatch by type."""
         if not self.connected:
             return
-        
-        # Try to get SCALED_IMU first (preferred)
-        scaled_imu = self.master.recv_match(type='SCALED_IMU', blocking=False)
-        if scaled_imu is not None:
-            self.publish_scaled_imu(scaled_imu)
-            return
+
+        for _ in range(10):
+            msg = self.master.recv_match(blocking=False)
+            if msg is None:
+                break
+            msg_type = msg.get_type()
+            if msg_type == 'SCALED_IMU':
+                self.publish_scaled_imu(msg)
+            elif msg_type == 'SYS_STATUS':
+                voltage_v = msg.voltage_battery / 1000.0
+                batt_msg = Float32()
+                batt_msg.data = voltage_v
+                self.battery_pub.publish(batt_msg)
+                self.get_logger().info(f'Battery: {voltage_v:.2f}V')
+            elif msg_type == 'HEARTBEAT':
+                self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
     
     def publish_scaled_imu(self, scaled_imu_msg):
         # Gyro message
@@ -319,26 +329,10 @@ class ArduPilotRoverNode(Node):
     
     def status_loop(self):
         """Publish status information"""
-        # Publish armed status
+        # armed status updated by imu_loop; just publish it here
         armed_msg = Bool()
         armed_msg.data = self.armed
         self.armed_pub.publish(armed_msg)
-        
-        # Check connection health — drain all pending messages and dispatch by type
-        if self.connected:
-            for _ in range(50):
-                msg = self.master.recv_match(blocking=False)
-                if msg is None:
-                    break
-                msg_type = msg.get_type()
-                if msg_type == 'HEARTBEAT':
-                    self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-                elif msg_type == 'SYS_STATUS':
-                    voltage_v = msg.voltage_battery / 1000.0  # mV → V
-                    batt_msg = Float32()
-                    batt_msg.data = voltage_v
-                    self.battery_pub.publish(batt_msg)
-                    self.get_logger().info(f'Battery: {voltage_v:.2f}V')
     
     def destroy_node(self):
         """Clean up when node is destroyed"""

@@ -82,7 +82,10 @@ FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
 # Ray > N × centre_dist means it passed through a gap — skip AVOID entirely
 # Only applies when far enough from wall; close in, AVOID must always engage
 FRONT_AVOID_MAX_DIAG_MULT   = 3.0
-FRONT_AVOID_MIN_GAP_DIST    = 1.2  # m — below this, gap skip is disabled
+FRONT_AVOID_MIN_GAP_DIST    = 1.5  # m — below this, relative gap skip is disabled
+# Glass doors on the right read 8-11m; real corridor walls read < 7.5m.
+# Only the RIGHT diagonal needs this check — that's the only side with doors.
+FRONT_AVOID_ABS_GAP_THRESH  = 8.0  # m — if front_R exceeds this, skip AVOID
 
 # PD + feedback gains
 KP            = 0.8
@@ -101,6 +104,9 @@ MAX_STEER     =  2.0  # ±2.0 = full servo lock
 BASE_SPEED    =  0.40  # m/s nominal
 TURN_SPEED    =  0.31  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
+# If alpha is more negative than this, the estimator is reading the wrong wall at a corner.
+# Invalidate D_ahead and treat as right_gone so RIGHT GONE+CORNER turns right instead.
+ALPHA_CONFUSION_DEG   = -50.0
 
 # Battery voltage scaling
 # Gains were tuned at NOMINAL_VOLTAGE. Below that, scale up to compensate for weaker motors.
@@ -297,16 +303,24 @@ class WallFollowerNode(Node):
 
         # --- Crash avoidance: steer away from angled approaching wall ---
         # Uses narrow center_dist so a gap straight ahead won't trigger it.
-        if center_dist < FRONT_AVOID_THRESH:
+        # Skip entirely when BOTH GONE recovery is committed to turning right.
+        in_recovery = (self._both_lost_since is not None
+                       and (now_s - self._both_lost_since) > COAST_S)
+        if center_dist < FRONT_AVOID_THRESH and not in_recovery:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
-                if center_dist > FRONT_AVOID_MIN_GAP_DIST and (front_L > max_diag or front_R > max_diag):
+                # Relative gap: diagonal >> centre (window/doorway further away)
+                rel_gap = center_dist > FRONT_AVOID_MIN_GAP_DIST and (front_L > max_diag or front_R > max_diag)
+                # Absolute gap: right diagonal through a glass door (reads 8-11m, only ever on right)
+                abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH
+                if rel_gap or abs_gap:
                     # A diagonal went through a gap (window / doorway).
                     # Asymmetry is garbage — skip AVOID, fall through to wall-following.
+                    reason = "abs" if abs_gap else "rel"
                     self.get_logger().info(
-                        f"AVOID SKIP (gap) ctr={center_dist:.2f}m  "
+                        f"AVOID SKIP ({reason}) ctr={center_dist:.2f}m  "
                         f"L={front_L:.2f} R={front_R:.2f}  max={max_diag:.2f}"
                     )
                 else:

@@ -79,9 +79,6 @@ FRONT_AVOID_THRESH  =   2.5  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
-# A real wall reading ≤ N × centre distance. Anything larger means the ray
-# passed through a gap (window / doorway) — steer away from the open side.
-FRONT_AVOID_MAX_DIAG_MULT = 3.0
 
 # PD + feedback gains
 KP            = 0.8
@@ -291,54 +288,32 @@ class WallFollowerNode(Node):
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
+                asymmetry = front_R - front_L
                 speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
-
-                # Gap detection: a diagonal reading > N × centre_dist means the
-                # ray passed through a window or doorway — not a real wall.
-                # Steer AWAY from whichever side is open; default right if both.
-                max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
-                L_gap = front_L > max_diag
-                R_gap = front_R > max_diag
-
-                if L_gap or R_gap:
-                    # Open side detected — steer away from the gap
-                    gap_steer = -MAX_STEER if (R_gap and not L_gap) else MAX_STEER
+                if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
+                    # Angled wall (\ or /) — steer away from it
+                    proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
+                    avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
+                    avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
                     cmd = Twist()
                     cmd.linear.x  = speed
-                    cmd.angular.z = gap_steer
+                    cmd.angular.z = avoid_steer
                     self._publish(cmd)
                     self.get_logger().info(
-                        f"AVOID GAP ctr={center_dist:.2f}m  "
-                        f"L={front_L:.2f}{'!' if L_gap else 'ok'} "
-                        f"R={front_R:.2f}{'!' if R_gap else 'ok'}  "
-                        f"steer={gap_steer:+.2f}"
+                        f"AVOID ctr={center_dist:.2f}m  "
+                        f"L={front_L:.2f} R={front_R:.2f}  "
+                        f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
                     )
                 else:
-                    asymmetry = front_R - front_L
-                    if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
-                        # Angled wall (\ or /) — steer away from it
-                        proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
-                        avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
-                        avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
-                        cmd = Twist()
-                        cmd.linear.x  = speed
-                        cmd.angular.z = avoid_steer
-                        self._publish(cmd)
-                        self.get_logger().info(
-                            f"AVOID ctr={center_dist:.2f}m  "
-                            f"L={front_L:.2f} R={front_R:.2f}  "
-                            f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
-                        )
-                    else:
-                        # Symmetric solid wall (--------) — always turn right
-                        cmd = Twist()
-                        cmd.linear.x  = speed
-                        cmd.angular.z = MAX_STEER  # full-lock RIGHT
-                        self._publish(cmd)
-                        self.get_logger().info(
-                            f"SOLID WALL ctr={center_dist:.2f}m  "
-                            f"L={front_L:.2f} R={front_R:.2f}  turning right"
-                        )
+                    # Symmetric solid wall (--------) — always turn right
+                    cmd = Twist()
+                    cmd.linear.x  = speed
+                    cmd.angular.z = MAX_STEER  # full-lock RIGHT
+                    self._publish(cmd)
+                    self.get_logger().info(
+                        f"SOLID WALL ctr={center_dist:.2f}m  "
+                        f"L={front_L:.2f} R={front_R:.2f}  turning right"
+                    )
                 return
 
         # --- Spike detector ---

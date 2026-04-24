@@ -308,10 +308,16 @@ class WallFollowerNode(Node):
 
         # --- Crash avoidance: steer away from angled approaching wall ---
         # Uses narrow center_dist so a gap straight ahead won't trigger it.
-        # Skip entirely when BOTH GONE recovery is committed to turning right.
-        in_recovery = (self._both_lost_since is not None
-                       and (now_s - self._both_lost_since) > COAST_S)
-        if center_dist < FRONT_AVOID_THRESH and not in_recovery:
+        # Skip when:
+        #   (a) BOTH GONE recovery is committed to turning right, OR
+        #   (b) F1TENTH is actively tracking a right turn (α > 10°) — at that point
+        #       AVOID just adds a spurious hard-right push into whatever the diagonal
+        #       hits (windows, doors). F1TENTH is already commanding the correct steer.
+        in_recovery    = (self._both_lost_since is not None
+                          and (now_s - self._both_lost_since) > COAST_S)
+        in_right_turn  = (math.isfinite(D_ahead) and D_ahead < MAX_PLAUSIBLE
+                          and math.degrees(alpha) > 10.0)
+        if center_dist < FRONT_AVOID_THRESH and not in_recovery and not in_right_turn:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):

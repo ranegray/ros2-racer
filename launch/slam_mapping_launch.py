@@ -23,9 +23,11 @@ Then kill this launch and run slam_racing_launch.py.
 """
 
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -34,6 +36,11 @@ def generate_launch_description():
     connection_string = LaunchConfiguration("connection_string", default="/dev/ttyACM1")
     baud_rate = LaunchConfiguration("baud_rate", default="115200")
     wheelbase = LaunchConfiguration("wheelbase", default="0.25")
+    lidar_port = LaunchConfiguration("lidar_port", default="/dev/ttyUSB0")
+    lidar_baudrate = LaunchConfiguration("lidar_baudrate", default="115200")
+    telemetry_rate = LaunchConfiguration("telemetry_rate", default="10.0")
+    camera_rate = LaunchConfiguration("camera_rate", default="10.0")
+    image_quality = LaunchConfiguration("image_quality", default="50")
 
     slam_config = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -45,6 +52,11 @@ def generate_launch_description():
         DeclareLaunchArgument("baud_rate", default_value="115200"),
         DeclareLaunchArgument("wheelbase", default_value="0.165",
                               description="Rover wheelbase in metres"),
+        DeclareLaunchArgument("lidar_port", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("lidar_baudrate", default_value="115200"),
+        DeclareLaunchArgument("telemetry_rate", default_value="10.0"),
+        DeclareLaunchArgument("camera_rate", default_value="10.0"),
+        DeclareLaunchArgument("image_quality", default_value="50"),
 
         # RPLIDAR A1 — publishes /scan with frame_id=laser
         # respawn=True: LIDAR stays in scan mode after Ctrl+C; first attempt
@@ -58,12 +70,28 @@ def generate_launch_description():
             respawn_delay=2.0,
             parameters=[{
                 "channel_type": "serial",
-                "serial_port": "/dev/ttyUSB0",
-                "serial_baudrate": 115200,
+                "serial_port": lidar_port,
+                "serial_baudrate": lidar_baudrate,
                 "frame_id": "laser",
                 "inverted": False,
                 "angle_compensate": True,
             }],
+        ),
+
+        # Camera stream — keeps the dashboard camera panel alive during mapping.
+        Node(
+            package="rs_stream",
+            executable="rs_stream_node",
+            name="rs_stream_node",
+            output="screen",
+        ),
+
+        # Front-distance perception for telemetry tiles during mapping.
+        Node(
+            package="perception",
+            executable="depth_node",
+            name="depth_node",
+            output="screen",
         ),
 
         # Static TF: base_link → laser
@@ -141,5 +169,29 @@ def generate_launch_description():
                 "control_frequency": 20.0,
                 "imu_frequency": 20.0,
             }],
+        ),
+
+        # Telemetry aggregator for the dashboard's existing panels.
+        Node(
+            package="telemetry",
+            executable="telemetry_node",
+            name="telemetry_node",
+            parameters=[{
+                "publish_rate": telemetry_rate,
+                "camera_rate": camera_rate,
+                "image_quality": image_quality,
+            }],
+            output="screen",
+        ),
+
+        # rosbridge exposes /telemetry/*, /scan, and /map to the React dashboard.
+        IncludeLaunchDescription(
+            AnyLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory("rosbridge_server"),
+                    "launch",
+                    "rosbridge_websocket_launch.xml",
+                )
+            )
         ),
     ])

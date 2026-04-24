@@ -25,6 +25,21 @@ export type LaserScan = {
   intensities: number[]
 }
 
+export type OccupancyGrid = {
+  header: { stamp: RosTime; frame_id: string }
+  info: {
+    map_load_time: RosTime
+    resolution: number
+    width: number
+    height: number
+    origin: {
+      position: { x: number; y: number; z: number }
+      orientation: { x: number; y: number; z: number; w: number }
+    }
+  }
+  data: number[] | Int8Array | ArrayBuffer
+}
+
 export type RacerTelemetry = {
   header: { stamp: RosTime; frame_id: string }
   gyro: RosVec3

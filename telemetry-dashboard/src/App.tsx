@@ -3,9 +3,16 @@ import * as ROSLIB from 'roslib'
 import { CameraPanel } from './components/CameraPanel'
 import { Charts } from './components/Charts'
 import { LidarPolar } from './components/LidarPolar'
+import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { CompressedImage, LaserScan, RacerTelemetry, Sample } from './telemetry'
+import type {
+  CompressedImage,
+  LaserScan,
+  OccupancyGrid,
+  RacerTelemetry,
+  Sample,
+} from './telemetry'
 import { BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
@@ -52,6 +59,8 @@ function App() {
   const [lineDebugFormat, setLineDebugFormat] = useState<string | null>(null)
   const [scan, setScan] = useState<LaserScan | null>(null)
   const [scanArrivedAt, setScanArrivedAt] = useState(0)
+  const [map, setMap] = useState<OccupancyGrid | null>(null)
+  const [mapArrivedAt, setMapArrivedAt] = useState(0)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const bufferRef = useRef<Sample[]>([])
@@ -156,6 +165,19 @@ function App() {
       setScanArrivedAt(Date.now())
     })
 
+    const mapTopic = new ROSLIB.Topic({
+      ros,
+      name: '/map',
+      messageType: 'nav_msgs/msg/OccupancyGrid',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 0,
+    })
+    mapTopic.subscribe((raw) => {
+      setMap(raw as unknown as OccupancyGrid)
+      setMapArrivedAt(Date.now())
+    })
+
     return () => {
       disposed = true
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
@@ -163,6 +185,7 @@ function App() {
       cameraTopic?.unsubscribe()
       lineDebugTopic?.unsubscribe()
       scanTopic?.unsubscribe()
+      mapTopic.unsubscribe()
       ros.close()
     }
   }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
@@ -206,6 +229,7 @@ function App() {
           arrivedAt={lineDebugArrivedAt}
         />
         <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
+        <MapPanel map={map} arrivedAt={mapArrivedAt} />
         <Charts samples={samples} />
       </div>
 

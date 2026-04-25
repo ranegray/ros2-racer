@@ -18,7 +18,6 @@ from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PointStamped, Twist
 
-FRONT_CLEAR_MIN_SAMPLES = 3
 RIGHT_TURN_COOLDOWN_S = 10.0
 
 
@@ -41,7 +40,6 @@ class WallLineNavNode(Node):
         self.cooldown_until = None
         self.right_open_scan_run = 0
         self.last_scan_stamp = None
-        self.latest_front_clear = False
 
         # Spike-detector state: last accepted (D_ahead, alpha) and its time.
         self._last_valid_D = None
@@ -74,7 +72,6 @@ class WallLineNavNode(Node):
         self.declare_parameter("max_d_jump", 0.8)
         self.declare_parameter("max_alpha_jump_deg", 60.0)
         self.declare_parameter("spike_stale_s", 0.7)
-        self.declare_parameter("front_clear_distance", 0.8)
         self.declare_parameter("debug_log_period_s", 0.5)
         # Line-follow P control on /line_follow_point. Image is 640 wide; the
         # camera is mounted off-centre so a perfectly-centred line lands
@@ -113,7 +110,6 @@ class WallLineNavNode(Node):
             self.get_parameter("max_alpha_jump_deg").value
         )
         self.spike_stale_s = self.get_parameter("spike_stale_s").value
-        self.front_clear_distance = self.get_parameter("front_clear_distance").value
         self.debug_log_period_s = self.get_parameter("debug_log_period_s").value
         line_image_width = float(self.get_parameter("line_image_width").value)
         self.line_image_center_x = line_image_width / 2.0
@@ -146,11 +142,6 @@ class WallLineNavNode(Node):
         self.last_scan_stamp = stamp
 
         D_ahead, alpha = self._right_wall_state(msg)
-        front_min = self._forward_min(msg)
-        front_clear = (
-            math.isfinite(front_min) and front_min >= self.front_clear_distance
-        )
-        self.latest_front_clear = front_clear
 
         now = self.get_clock().now().nanoseconds * 1e-9
 
@@ -196,12 +187,10 @@ class WallLineNavNode(Node):
             self._last_debug_log = now
             D_str = f"{D_ahead:5.2f}" if math.isfinite(D_ahead) else "  NaN"
             a_str = f"{math.degrees(alpha):+6.1f}" if math.isfinite(alpha) else "   NaN"
-            f_str = f"{front_min:.2f}" if math.isfinite(front_min) else " inf"
             self.get_logger().info(
                 f"right: D={D_str}m a={a_str}deg lost={int(wall_lost_now)} "
                 f"spike={int(is_spike)} run={self.right_open_scan_run}/"
-                f"{self.right_open_required_scans} fwd={f_str}m "
-                f"fclear={int(front_clear)}"
+                f"{self.right_open_required_scans}"
             )
 
     def follow_point_callback(self, msg: PointStamped):
@@ -246,7 +235,6 @@ class WallLineNavNode(Node):
         if (
             (self.cooldown_until is None or now >= self.cooldown_until)
             and self.right_open_scan_run >= self.right_open_required_scans
-            and self.latest_front_clear
         ):
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
@@ -357,27 +345,6 @@ class WallLineNavNode(Node):
         D_now = b * math.cos(alpha)
         D_ahead = D_now + self.look_ahead * math.sin(alpha)
         return D_ahead, alpha
-
-    def _forward_min(self, msg: LaserScan) -> float:
-        front_ranges = self._sector_ranges(msg, -15.0, 15.0)
-        if len(front_ranges) < FRONT_CLEAR_MIN_SAMPLES:
-            return float("inf")
-        return min(front_ranges)
-
-    def _sector_ranges(self, scan: LaserScan, start_deg: float, end_deg: float):
-        start = math.radians(start_deg)
-        end = math.radians(end_deg)
-        ranges = []
-        for i, r in enumerate(scan.ranges):
-            angle = scan.angle_min + i * scan.angle_increment
-            if angle < start or angle > end:
-                continue
-            if math.isinf(r):
-                ranges.append(scan.range_max)
-            elif math.isfinite(r) and scan.range_min <= r <= scan.range_max:
-                ranges.append(r)
-        return ranges
-
 
 def main(args=None):
     rclpy.init(args=args)

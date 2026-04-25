@@ -31,6 +31,7 @@ class WallLineNavNode(Node):
         self._setup_publishers()
 
         self.latest_follow_point: PointStamped | None = None
+        self.line_visible = False
 
         self.mode = "forward"
         self.turn_until = None
@@ -188,7 +189,10 @@ class WallLineNavNode(Node):
 
     def follow_point_callback(self, msg: PointStamped):
         if msg.point.x == 0.0 and msg.point.y == 0.0:
+            self.line_visible = False
+            self.latest_follow_point = None
             return
+        self.line_visible = True
         self.latest_follow_point = msg
 
     def control_loop(self):
@@ -244,9 +248,13 @@ class WallLineNavNode(Node):
 
     def _publish_line_follow(self, now):
         cmd = Twist()
-        follow = self._extract_line_point(self.latest_follow_point, now)
+        follow = (
+            self._extract_line_point(self.latest_follow_point, now)
+            if self.line_visible
+            else None
+        )
         if follow is None:
-            # Fresh follow point missing: keep moving forward instead of freezing.
+            # Line missing: keep moving forward instead of freezing.
             cmd.linear.x = float(self.forward_speed)
             self.cmd_pub.publish(cmd)
             return

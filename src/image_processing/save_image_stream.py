@@ -14,9 +14,10 @@ cfg.enable_stream(rs.stream.color, W, H, rs.format.bgr8, FPS)
 j = 0
 path = os.getcwd()
 dirname = os.path.join(path, 'r/run{}'.format(j))
-while not os.path.exists(dirname):          
+while os.path.exists(dirname):          
    j = j+1
    dirname = os.path.join(path, 'r/run{}'.format(j))
+os.makedirs(dirname)
 print("Starting pipeline…")
 pipe.start(cfg)
 frames = pipe.wait_for_frames(5000)   # 5s timeout
@@ -30,7 +31,7 @@ def update(self):
         img = np.asanyarray(color.get_data())[:,:,::-1]  # already BGR
         im.set_data(img)
         imgname = 'r/Cameraframe{x}.png'.format(i)
-        while not os.path.exists(os.path.join(dirname,imgname)):                 
+        while os.path.exists(os.path.join(dirname,imgname)):                 
             i = i+1            
             imgname = 'r/Cameraframe{x}.png'.format(i)
         image.imsave(os.path.join(dirname, imgname), img)

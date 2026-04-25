@@ -93,7 +93,7 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 1.6)
+        self.declare_parameter("line_kp", 1.2)
         self.declare_parameter("line_kd", 1.5)
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.

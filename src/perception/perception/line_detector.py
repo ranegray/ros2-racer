@@ -27,9 +27,9 @@ class LineDetectorNode(Node):
         self.image_width = 640
         self.image_height = 480
 
-        # Detection band (y_start, y_end, x_start, x_end)
-        # Starting at 1/3 height gives lookahead — centroid shifts earlier as turns approach.
-        self.band = (self.image_height // 3, self.image_height, 0, self.image_width)
+        # Detection band (y_start, y_end, x_start, x_end). Use the full image;
+        # camera tilt handles keeping the floor dominant in the frame.
+        self.band = (0, self.image_height, 0, self.image_width)
 
         self._setup_subscribers()
         self._setup_publishers()

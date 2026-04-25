@@ -46,7 +46,7 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.15)
+        self.declare_parameter("forward_speed", 0.30)
         self.declare_parameter("turn_linear_speed", 0.10)
         self.declare_parameter("right_turn_angular_speed", 0.70)
         self.declare_parameter("right_turn_duration", 2.25)
@@ -72,7 +72,9 @@ class WallLineNavNode(Node):
             "right_open_required_scans"
         ).value
         self.right_open_min_samples = self.get_parameter("right_open_min_samples").value
-        self.front_clear_min_samples = self.get_parameter("front_clear_min_samples").value
+        self.front_clear_min_samples = self.get_parameter(
+            "front_clear_min_samples"
+        ).value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
@@ -141,9 +143,8 @@ class WallLineNavNode(Node):
             self.right_open_scan_run = 0
 
         if (
-            (self.cooldown_until is None or now >= self.cooldown_until)
-            and self.right_open_scan_run >= self.right_open_required_scans
-        ):
+            self.cooldown_until is None or now >= self.cooldown_until
+        ) and self.right_open_scan_run >= self.right_open_required_scans:
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
             self.get_logger().info("Clear right hallway detected; turning right")

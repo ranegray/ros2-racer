@@ -19,7 +19,7 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PointStamped, Twist
 
 FRONT_CLEAR_MIN_SAMPLES = 3
-RIGHT_TURN_COOLDOWN_S = 2.0
+RIGHT_TURN_COOLDOWN_S = 10.0
 
 
 class WallLineNavNode(Node):

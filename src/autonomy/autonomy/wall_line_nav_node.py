@@ -62,6 +62,9 @@ class WallLineNavNode(Node):
         self._line_prev_offset_time = None
         self._line_last_steer = 0.0
 
+        # Throttle for the "turn active" status log (Hz-rate spam guard).
+        self._last_turn_log = None
+
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
@@ -245,6 +248,18 @@ class WallLineNavNode(Node):
 
         if self.mode == "turn_right":
             if self.turn_until is not None and now < self.turn_until:
+                now_s = now.nanoseconds * 1e-9
+                if (
+                    self._last_turn_log is None
+                    or (now_s - self._last_turn_log) >= 0.5
+                ):
+                    self._last_turn_log = now_s
+                    remaining = (self.turn_until - now).nanoseconds * 1e-9
+                    self.get_logger().info(
+                        f"[turn] active: {remaining:.2f}s remaining "
+                        f"v={self.turn_linear_speed:.2f} "
+                        f"steer={self.right_turn_steering:.2f}"
+                    )
                 cmd.linear.x = self.turn_linear_speed
                 cmd.angular.z = self.right_turn_steering
                 self.cmd_pub.publish(cmd)
@@ -254,6 +269,11 @@ class WallLineNavNode(Node):
             self.turn_until = None
             self.cooldown_until = now + Duration(seconds=RIGHT_TURN_COOLDOWN_S)
             self.right_open_scan_run = 0
+            self._last_turn_log = None
+            self.get_logger().info(
+                f"[turn] complete: handing back to line PD; "
+                f"cooldown {RIGHT_TURN_COOLDOWN_S:.1f}s"
+            )
 
         if (
             (self.cooldown_until is None or now >= self.cooldown_until)
@@ -262,9 +282,12 @@ class WallLineNavNode(Node):
         ):
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
+            self._last_turn_log = None
             self.get_logger().info(
-                "Right wall absent; committing scripted right turn "
-                f"v={self.turn_linear_speed:.2f} steer={self.right_turn_steering:.2f}"
+                "[turn] commit: right wall absent — scripted right turn "
+                f"v={self.turn_linear_speed:.2f} "
+                f"steer={self.right_turn_steering:.2f} "
+                f"duration={self.right_turn_duration:.2f}s"
             )
             cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = self.right_turn_steering

@@ -23,8 +23,6 @@ from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import PointStamped, Twist
 
 
-RIGHT_OPEN_FRACTION = 0.70
-RIGHT_OPEN_REQUIRED_SCANS = 3
 RIGHT_OPEN_MIN_SAMPLES = 10
 FRONT_CLEAR_MIN_SAMPLES = 3
 RIGHT_TURN_COOLDOWN_S = 2.0
@@ -58,7 +56,9 @@ class WallLineNavNode(Node):
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
-        self.declare_parameter("right_open_distance", 2.0)
+        self.declare_parameter("right_open_distance", 4.0)
+        self.declare_parameter("right_open_fraction", 0.80)
+        self.declare_parameter("right_open_required_scans", 8)
         self.declare_parameter("front_clear_distance", 0.8)
 
         self.forward_speed = self.get_parameter("forward_speed").value
@@ -66,6 +66,10 @@ class WallLineNavNode(Node):
         self.right_turn_steering = self.get_parameter("right_turn_steering").value
         self.right_turn_duration = self.get_parameter("right_turn_duration").value
         self.right_open_distance = self.get_parameter("right_open_distance").value
+        self.right_open_fraction = self.get_parameter("right_open_fraction").value
+        self.right_open_required_scans = self.get_parameter(
+            "right_open_required_scans"
+        ).value
         self.front_clear_distance = self.get_parameter("front_clear_distance").value
 
     def _setup_subscriptions(self):
@@ -136,7 +140,7 @@ class WallLineNavNode(Node):
 
         if (
             self.cooldown_until is None or now >= self.cooldown_until
-        ) and self.right_open_scan_run >= RIGHT_OPEN_REQUIRED_SCANS:
+        ) and self.right_open_scan_run >= self.right_open_required_scans:
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
             self.get_logger().info(
@@ -152,23 +156,46 @@ class WallLineNavNode(Node):
         self.cmd_pub.publish(cmd)
 
     def _detect_clear_right_hallway(self, scan: LaserScan) -> bool:
-        right_ranges = self._sector_ranges(scan, -100.0, -55.0)
+        right_open_frac, right_total = self._sector_open_fraction(
+            scan, -100.0, -55.0, self.right_open_distance
+        )
         front_ranges = self._sector_ranges(scan, -15.0, 15.0)
         if (
-            len(right_ranges) < RIGHT_OPEN_MIN_SAMPLES
+            right_total < RIGHT_OPEN_MIN_SAMPLES
             or len(front_ranges) < FRONT_CLEAR_MIN_SAMPLES
         ):
             return False
 
-        right_clear = self._clear_fraction(
-            right_ranges, self.right_open_distance, scan.range_max
-        )
         front_min = min(front_ranges)
 
         return (
-            right_clear >= RIGHT_OPEN_FRACTION
+            right_open_frac >= self.right_open_fraction
             and front_min >= self.front_clear_distance
         )
+
+    def _sector_open_fraction(
+        self, scan: LaserScan, start_deg: float, end_deg: float, threshold: float
+    ):
+        # A beam is "open" only with strong evidence: inf/NaN (no return) or
+        # a finite reading past `threshold`. Anything else — including
+        # finite-but-out-of-range glitches — counts as blocked, biasing
+        # toward false-negatives so a misfire can't steer off the line.
+        start = math.radians(start_deg)
+        end = math.radians(end_deg)
+        open_count = 0
+        total = 0
+        for i, r in enumerate(scan.ranges):
+            angle = scan.angle_min + i * scan.angle_increment
+            if angle < start or angle > end:
+                continue
+            total += 1
+            if math.isinf(r) or math.isnan(r):
+                open_count += 1
+            elif scan.range_min <= r <= scan.range_max and r >= threshold:
+                open_count += 1
+        if total == 0:
+            return 0.0, 0
+        return open_count / total, total
 
     def _sector_ranges(self, scan: LaserScan, start_deg: float, end_deg: float):
         start = math.radians(start_deg)
@@ -183,14 +210,6 @@ class WallLineNavNode(Node):
             elif math.isfinite(r) and scan.range_min <= r <= scan.range_max:
                 ranges.append(r)
         return ranges
-
-    @staticmethod
-    def _clear_fraction(ranges, threshold: float, range_max: float) -> float:
-        if not ranges:
-            return 0.0
-        capped_threshold = min(threshold, range_max)
-        clear_count = sum(1 for r in ranges if r >= capped_threshold)
-        return clear_count / len(ranges)
 
 
 def main(args=None):

@@ -82,6 +82,13 @@ Check controller commands:
 ros2 topic echo /cmd_vel
 ```
 
+Check only the command values during a turn:
+
+```bash
+ros2 topic echo /cmd_vel --field linear.x
+ros2 topic echo /cmd_vel --field angular.z
+```
+
 Check odometry:
 
 ```bash

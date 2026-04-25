@@ -67,7 +67,7 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.33)
+        self.declare_parameter("forward_speed", 0.22)
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
@@ -93,12 +93,14 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 1.2)
-        self.declare_parameter("line_kd", 1.5)
+        self.declare_parameter("line_kp", 0.45)
+        self.declare_parameter("line_kd", 0.12)
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.
-        self.declare_parameter("line_max_angular", 1.0)
-        self.declare_parameter("line_offset_alpha", 0.5)
+        self.declare_parameter("line_max_angular", 0.65)
+        self.declare_parameter("line_offset_alpha", 0.25)
+        self.declare_parameter("line_offset_deadband", 0.04)
+        self.declare_parameter("line_max_steer_step", 0.06)
         self.declare_parameter("line_goal_timeout_s", 1.0)
 
         self.forward_speed = self.get_parameter("forward_speed").value
@@ -129,6 +131,8 @@ class WallLineNavNode(Node):
         self.line_kd = self.get_parameter("line_kd").value
         self.line_max_angular = self.get_parameter("line_max_angular").value
         self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
+        self.line_offset_deadband = self.get_parameter("line_offset_deadband").value
+        self.line_max_steer_step = self.get_parameter("line_max_steer_step").value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
 
     def _setup_subscriptions(self):
@@ -252,6 +256,7 @@ class WallLineNavNode(Node):
                     )
                 cmd.linear.x = self.turn_linear_speed
                 cmd.angular.z = self.right_turn_steering
+                self._line_last_steer = float(cmd.angular.z)
                 self.cmd_pub.publish(cmd)
                 return
 
@@ -281,19 +286,28 @@ class WallLineNavNode(Node):
             )
             cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = self.right_turn_steering
+            self._line_last_steer = float(cmd.angular.z)
             self.cmd_pub.publish(cmd)
             return
 
         self._publish_line_follow(now)
 
+    def _slew_line_steer(self, target):
+        delta = max(
+            -self.line_max_steer_step,
+            min(self.line_max_steer_step, target - self._line_last_steer),
+        )
+        self._line_last_steer += delta
+        return self._line_last_steer
+
     def _publish_line_follow(self, now):
         cmd = Twist()
         follow = self._extract_line_point(self.latest_follow_point, now)
         if follow is None:
-            # Fresh follow point missing — hold last steer at base speed so a
-            # one-frame detection drop doesn't jolt the heading.
-            cmd.linear.x = float(self.forward_speed)
-            cmd.angular.z = float(self._line_last_steer)
+            # Fresh follow point missing: bleed steering back toward zero and
+            # crawl instead of driving on stale line geometry.
+            cmd.linear.x = float(self.forward_speed * 0.4)
+            cmd.angular.z = float(self._slew_line_steer(0.0))
             self.cmd_pub.publish(cmd)
             return
 
@@ -317,9 +331,11 @@ class WallLineNavNode(Node):
         self._line_prev_offset_time = now_s
 
         raw = self.line_kp * self._line_smoothed_offset + self.line_kd * d_offset
+        if abs(raw) < self.line_offset_deadband:
+            raw = 0.0
         # tanh saturates softly inside ±line_max_angular instead of clamping.
-        steer = self.line_max_angular * math.tanh(raw / self.line_max_angular)
-        self._line_last_steer = steer
+        target_steer = self.line_max_angular * math.tanh(raw / self.line_max_angular)
+        steer = self._slew_line_steer(target_steer)
 
         cmd.linear.x = float(self.forward_speed)
         cmd.angular.z = float(steer)

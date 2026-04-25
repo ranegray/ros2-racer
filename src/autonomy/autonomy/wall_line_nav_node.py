@@ -17,9 +17,17 @@ import math
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Float32
 from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import PointStamped, Twist
+
+
+RIGHT_OPEN_FRACTION = 0.70
+RIGHT_OPEN_REQUIRED_SCANS = 3
+RIGHT_OPEN_MIN_SAMPLES = 10
+FRONT_CLEAR_MIN_SAMPLES = 3
+RIGHT_TURN_COOLDOWN_S = 2.0
 
 
 class WallLineNavNode(Node):
@@ -47,38 +55,22 @@ class WallLineNavNode(Node):
 
     def _setup_parameters(self):
         self.declare_parameter("forward_speed", 0.30)
-        self.declare_parameter("turn_linear_speed", 0.10)
-        self.declare_parameter("right_turn_angular_speed", 0.70)
-        self.declare_parameter("right_turn_duration", 2.25)
-        self.declare_parameter("turn_cooldown", 2.0)
+        self.declare_parameter("turn_linear_speed", 0.40)
+        self.declare_parameter("right_turn_steering", 2.0)
+        self.declare_parameter("right_turn_duration", 2.0)
         self.declare_parameter("right_open_distance", 2.0)
         self.declare_parameter("front_clear_distance", 0.8)
-        self.declare_parameter("right_open_fraction", 0.70)
-        self.declare_parameter("right_open_required_scans", 3)
-        self.declare_parameter("right_open_min_samples", 10)
-        self.declare_parameter("front_clear_min_samples", 3)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
-        self.right_turn_angular_speed = self.get_parameter(
-            "right_turn_angular_speed"
-        ).value
+        self.right_turn_steering = self.get_parameter("right_turn_steering").value
         self.right_turn_duration = self.get_parameter("right_turn_duration").value
-        self.turn_cooldown = self.get_parameter("turn_cooldown").value
         self.right_open_distance = self.get_parameter("right_open_distance").value
         self.front_clear_distance = self.get_parameter("front_clear_distance").value
-        self.right_open_fraction = self.get_parameter("right_open_fraction").value
-        self.right_open_required_scans = self.get_parameter(
-            "right_open_required_scans"
-        ).value
-        self.right_open_min_samples = self.get_parameter("right_open_min_samples").value
-        self.front_clear_min_samples = self.get_parameter(
-            "front_clear_min_samples"
-        ).value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
-            LaserScan, "/scan", self.scan_callback, 10
+            LaserScan, "/scan", self.scan_callback, qos_profile_sensor_data
         )
         self.front_distance_sub = self.create_subscription(
             Float32, "/perception/front_distance", self.front_distance_callback, 10
@@ -133,23 +125,26 @@ class WallLineNavNode(Node):
         if self.mode == "turn_right":
             if self.turn_until is not None and now < self.turn_until:
                 cmd.linear.x = self.turn_linear_speed
-                cmd.angular.z = self.right_turn_angular_speed
+                cmd.angular.z = self.right_turn_steering
                 self.cmd_pub.publish(cmd)
                 return
 
             self.mode = "forward"
             self.turn_until = None
-            self.cooldown_until = now + Duration(seconds=self.turn_cooldown)
+            self.cooldown_until = now + Duration(seconds=RIGHT_TURN_COOLDOWN_S)
             self.right_open_scan_run = 0
 
         if (
             self.cooldown_until is None or now >= self.cooldown_until
-        ) and self.right_open_scan_run >= self.right_open_required_scans:
+        ) and self.right_open_scan_run >= RIGHT_OPEN_REQUIRED_SCANS:
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
-            self.get_logger().info("Clear right hallway detected; turning right")
+            self.get_logger().info(
+                "Clear right hallway detected; turning right "
+                f"v={self.turn_linear_speed:.2f} steer={self.right_turn_steering:.2f}"
+            )
             cmd.linear.x = self.turn_linear_speed
-            cmd.angular.z = self.right_turn_angular_speed
+            cmd.angular.z = self.right_turn_steering
             self.cmd_pub.publish(cmd)
             return
 
@@ -160,8 +155,8 @@ class WallLineNavNode(Node):
         right_ranges = self._sector_ranges(scan, -100.0, -55.0)
         front_ranges = self._sector_ranges(scan, -15.0, 15.0)
         if (
-            len(right_ranges) < self.right_open_min_samples
-            or len(front_ranges) < self.front_clear_min_samples
+            len(right_ranges) < RIGHT_OPEN_MIN_SAMPLES
+            or len(front_ranges) < FRONT_CLEAR_MIN_SAMPLES
         ):
             return False
 
@@ -171,7 +166,7 @@ class WallLineNavNode(Node):
         front_min = min(front_ranges)
 
         return (
-            right_clear >= self.right_open_fraction
+            right_clear >= RIGHT_OPEN_FRACTION
             and front_min >= self.front_clear_distance
         )
 

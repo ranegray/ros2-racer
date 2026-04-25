@@ -24,13 +24,6 @@ class LineDetectorNode(Node):
         self.b_max = 210      # reject specular reflections (too-bright blue)
         self.min_blob_pixels = 60  # blobs smaller than this are ignored
 
-        self.image_width = 640
-        self.image_height = 480
-
-        # Detection band (y_start, y_end, x_start, x_end). Only use the bottom
-        # half so distant/upper-frame artifacts cannot pull the follow point.
-        self.band = (self.image_height // 2, self.image_height, 0, self.image_width)
-
         self._setup_subscribers()
         self._setup_publishers()
 
@@ -70,7 +63,12 @@ class LineDetectorNode(Node):
             false positives automatically — the contour-based approach from
             https://const-toporov.medium.com/line-following-robot-with-opencv-and-contour-based-approach-417b90f2c298
         """
-        y0, y1, x0, x1 = self.band
+        height, width = image.shape[:2]
+        # Detection band (y_start, y_end, x_start, x_end). Only use the bottom
+        # half of the actual frame so upper-frame artifacts cannot pull the
+        # follow point even if camera resolution changes.
+        band = (height // 2, height, 0, width)
+        y0, y1, x0, x1 = band
         cropped = image[y0:y1, x0:x1]
 
         b = cropped[..., 0].astype(np.int32)
@@ -92,6 +90,7 @@ class LineDetectorNode(Node):
             "num_blobs": 0,
             "largest_blob_size": 0,
             "total_mask_pixels": int(mask.sum()),
+            "band": band,
             "follow_centroid": None,
             "lookahead_centroid": None,
             "rejected_small_blob": False,
@@ -141,7 +140,7 @@ class LineDetectorNode(Node):
     def _publish_debug_image(self, image, det, header):
         debug = image.copy()
 
-        self._overlay_band(debug, self.band, det["mask"], det["largest_blob_mask"])
+        self._overlay_band(debug, det["band"], det["mask"], det["largest_blob_mask"])
         self._draw_centroids(debug, det["follow_centroid"])
         self._draw_hud(debug, det)
 
@@ -162,6 +161,8 @@ class LineDetectorNode(Node):
 
     def _overlay_band(self, debug, band, mask, largest_blob_mask):
         y0, y1, x0, x1 = band
+        if y0 > 0:
+            debug[:y0, :] = (debug[:y0, :].astype(np.float32) * 0.25).astype(np.uint8)
         cv2.rectangle(debug, (x0, y0), (x1 - 1, y1 - 1), (255, 255, 0), 2)
 
         region = debug[y0:y1, x0:x1].astype(np.float32)

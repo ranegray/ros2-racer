@@ -48,6 +48,7 @@ class OdometryNode(Node):
         self.create_subscription(Twist, "cmd_vel", self._cmd_cb, 10)
         # Integrate at 20 Hz regardless of cmd_vel rate
         self.create_timer(0.05, self._integrate)
+        self._publish_pose(self.get_clock().now())
 
         self.get_logger().info(f"Odometry node started (wheelbase={self.L} m)")
 
@@ -76,6 +77,9 @@ class OdometryNode(Node):
         self._y += dy
         self._yaw += dth
 
+        self._publish_pose(now)
+
+    def _publish_pose(self, now):
         stamp = now.to_msg()
 
         # Publish TF odom → base_link
@@ -102,8 +106,8 @@ class OdometryNode(Node):
         odom.pose.pose.position.y = self._y
         odom.pose.pose.orientation.z = sy
         odom.pose.pose.orientation.w = cy
-        odom.twist.twist.linear.x = v
-        odom.twist.twist.angular.z = w
+        odom.twist.twist.linear.x = self._last_v
+        odom.twist.twist.angular.z = self._last_w
         # Covariance: high uncertainty since we have no wheel encoders
         odom.pose.covariance[0] = 0.1
         odom.pose.covariance[7] = 0.1

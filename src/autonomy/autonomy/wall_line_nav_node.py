@@ -93,14 +93,14 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 0.45)
-        self.declare_parameter("line_kd", 0.12)
+        self.declare_parameter("line_kp", 1.25)
+        self.declare_parameter("line_kd", 0.18)
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.
-        self.declare_parameter("line_max_angular", 0.65)
-        self.declare_parameter("line_offset_alpha", 0.25)
-        self.declare_parameter("line_offset_deadband", 0.04)
-        self.declare_parameter("line_max_steer_step", 0.06)
+        self.declare_parameter("line_max_angular", 2.0)
+        self.declare_parameter("line_offset_alpha", 0.35)
+        self.declare_parameter("line_offset_deadband", 0.0)
+        self.declare_parameter("line_max_steer_step", 0.28)
         self.declare_parameter("line_goal_timeout_s", 1.0)
 
         self.forward_speed = self.get_parameter("forward_speed").value
@@ -253,10 +253,9 @@ class WallLineNavNode(Node):
                         f"[turn] active: {remaining:.2f}s remaining "
                         f"v={self.turn_linear_speed:.2f} "
                         f"steer={self.right_turn_steering:.2f}"
-                    )
+                )
                 cmd.linear.x = self.turn_linear_speed
                 cmd.angular.z = self.right_turn_steering
-                self._line_last_steer = float(cmd.angular.z)
                 self.cmd_pub.publish(cmd)
                 return
 
@@ -265,6 +264,10 @@ class WallLineNavNode(Node):
             self.cooldown_until = now + Duration(seconds=RIGHT_TURN_COOLDOWN_S)
             self.right_open_scan_run = 0
             self._last_turn_log = None
+            self._line_last_steer = 0.0
+            self._line_smoothed_offset = 0.0
+            self._line_prev_offset = 0.0
+            self._line_prev_offset_time = None
             self.get_logger().info(
                 f"[turn] complete: handing back to line PD; "
                 f"cooldown {RIGHT_TURN_COOLDOWN_S:.1f}s"
@@ -286,7 +289,6 @@ class WallLineNavNode(Node):
             )
             cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = self.right_turn_steering
-            self._line_last_steer = float(cmd.angular.z)
             self.cmd_pub.publish(cmd)
             return
 

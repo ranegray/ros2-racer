@@ -67,7 +67,7 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.30)
+        self.declare_parameter("forward_speed", 0.37)
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
@@ -93,14 +93,14 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 1.25)
-        self.declare_parameter("line_kd", 0.18)
+        self.declare_parameter("line_kp", 1.4)
+        self.declare_parameter("line_kd", 0.0)
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.
-        self.declare_parameter("line_max_angular", 2.0)
-        self.declare_parameter("line_offset_alpha", 0.35)
+        self.declare_parameter("line_max_angular", 1.0)
+        self.declare_parameter("line_offset_alpha", 1.0)
         self.declare_parameter("line_offset_deadband", 0.0)
-        self.declare_parameter("line_max_steer_step", 0.28)
+        self.declare_parameter("line_max_steer_step", 1.0)
         self.declare_parameter("line_goal_timeout_s", 1.0)
 
         self.forward_speed = self.get_parameter("forward_speed").value
@@ -253,7 +253,7 @@ class WallLineNavNode(Node):
                         f"[turn] active: {remaining:.2f}s remaining "
                         f"v={self.turn_linear_speed:.2f} "
                         f"steer={self.right_turn_steering:.2f}"
-                )
+                    )
                 cmd.linear.x = self.turn_linear_speed
                 cmd.angular.z = self.right_turn_steering
                 self.cmd_pub.publish(cmd)

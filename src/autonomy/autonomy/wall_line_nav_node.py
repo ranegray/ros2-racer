@@ -32,6 +32,8 @@ class WallLineNavNode(Node):
 
         self.latest_follow_point: PointStamped | None = None
         self.line_visible = False
+        self.line_smoothed_offset = 0.0
+        self.line_last_steer = 0.0
 
         self.mode = "forward"
         self.turn_until = None
@@ -78,11 +80,14 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 1.6)
-        # Cap below full lock; the scripted right turn handles hard corners.
-        self.declare_parameter("line_max_angular", 1.35)
+        self.declare_parameter("line_kp", 0.8)
+        # Keep line steering gentle; scripted right turn handles hard corners.
+        self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)
         self.declare_parameter("line_missing_speed", 0.25)
+        self.declare_parameter("line_offset_alpha", 0.25)
+        self.declare_parameter("line_offset_deadband", 0.06)
+        self.declare_parameter("line_max_steer_step", 0.08)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
@@ -112,6 +117,9 @@ class WallLineNavNode(Node):
         self.line_max_angular = self.get_parameter("line_max_angular").value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
         self.line_missing_speed = self.get_parameter("line_missing_speed").value
+        self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
+        self.line_offset_deadband = self.get_parameter("line_offset_deadband").value
+        self.line_max_steer_step = self.get_parameter("line_max_steer_step").value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
@@ -193,6 +201,7 @@ class WallLineNavNode(Node):
         if msg.point.x == 0.0 and msg.point.y == 0.0:
             self.line_visible = False
             self.latest_follow_point = None
+            self.line_smoothed_offset = 0.0
             return
         self.line_visible = True
         self.latest_follow_point = msg
@@ -258,16 +267,34 @@ class WallLineNavNode(Node):
         )
         if follow is None:
             cmd.linear.x = float(self.line_missing_speed)
+            self.line_last_steer = self._slew_line_steer(0.0)
+            cmd.angular.z = float(self.line_last_steer)
             self.cmd_pub.publish(cmd)
             return
 
         offset = (follow[0] - self.line_target_x) / self.line_image_center_x
-        raw = self.line_kp * offset
+        self.line_smoothed_offset = (
+            self.line_offset_alpha * offset
+            + (1.0 - self.line_offset_alpha) * self.line_smoothed_offset
+        )
+        if abs(self.line_smoothed_offset) < self.line_offset_deadband:
+            self.line_smoothed_offset = 0.0
+
+        raw = self.line_kp * self.line_smoothed_offset
         # tanh saturates softly inside ±line_max_angular instead of clamping.
-        cmd.angular.z = float(
+        target_steer = float(
             self.line_max_angular * math.tanh(raw / self.line_max_angular)
         )
+        self.line_last_steer = self._slew_line_steer(target_steer)
+        cmd.angular.z = float(self.line_last_steer)
         self.cmd_pub.publish(cmd)
+
+    def _slew_line_steer(self, target):
+        delta = max(
+            -self.line_max_steer_step,
+            min(self.line_max_steer_step, target - self.line_last_steer),
+        )
+        return self.line_last_steer + delta
 
     def _extract_line_point(self, msg: PointStamped | None, now):
         if msg is None:

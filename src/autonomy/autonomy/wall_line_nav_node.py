@@ -51,7 +51,7 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.37)
+        self.declare_parameter("forward_speed", 0.33)
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
@@ -77,7 +77,7 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 0.9)
+        self.declare_parameter("line_kp", 1.2)
         # Cap below full lock; the scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 1.35)
         self.declare_parameter("line_goal_timeout_s", 1.0)
@@ -246,7 +246,8 @@ class WallLineNavNode(Node):
         cmd = Twist()
         follow = self._extract_line_point(self.latest_follow_point, now)
         if follow is None:
-            # Fresh follow point missing: stop instead of driving on stale line geometry.
+            # Fresh follow point missing: keep moving forward instead of freezing.
+            cmd.linear.x = float(self.forward_speed)
             self.cmd_pub.publish(cmd)
             return
 

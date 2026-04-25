@@ -68,7 +68,7 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.30)
+        self.declare_parameter("forward_speed", 0.33)
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
@@ -99,7 +99,6 @@ class WallLineNavNode(Node):
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.
         self.declare_parameter("line_max_angular", 1.0)
-        self.declare_parameter("line_steering_trim", 0.12)
         self.declare_parameter("line_offset_alpha", 0.5)
         self.declare_parameter("line_goal_timeout_s", 1.0)
 
@@ -130,7 +129,6 @@ class WallLineNavNode(Node):
         self.line_kp = self.get_parameter("line_kp").value
         self.line_kd = self.get_parameter("line_kd").value
         self.line_max_angular = self.get_parameter("line_max_angular").value
-        self.line_steering_trim = self.get_parameter("line_steering_trim").value
         self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
 
@@ -328,9 +326,7 @@ class WallLineNavNode(Node):
 
         raw = self.line_kp * self._line_smoothed_offset + self.line_kd * d_offset
         # tanh saturates softly inside ±line_max_angular instead of clamping.
-        steer = self.line_max_angular * math.tanh(
-            (raw + self.line_steering_trim) / self.line_max_angular
-        )
+        steer = self.line_max_angular * math.tanh(raw / self.line_max_angular)
         self._line_last_steer = steer
 
         cmd.linear.x = float(self.forward_speed)

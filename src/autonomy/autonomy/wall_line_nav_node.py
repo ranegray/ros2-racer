@@ -23,7 +23,6 @@ from std_msgs.msg import Float32
 from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import PointStamped, Twist
 
-
 FRONT_CLEAR_MIN_SAMPLES = 3
 RIGHT_TURN_COOLDOWN_S = 2.0
 
@@ -94,7 +93,7 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 0.8)
+        self.declare_parameter("line_kp", 1.6)
         self.declare_parameter("line_kd", 1.5)
         # Cap kept gentle — the scripted right turn handles hard corners,
         # so the line PD never needs full lock.
@@ -212,11 +211,7 @@ class WallLineNavNode(Node):
         ):
             self._last_debug_log = now
             D_str = f"{D_ahead:5.2f}" if math.isfinite(D_ahead) else "  NaN"
-            a_str = (
-                f"{math.degrees(alpha):+6.1f}"
-                if math.isfinite(alpha)
-                else "   NaN"
-            )
+            a_str = f"{math.degrees(alpha):+6.1f}" if math.isfinite(alpha) else "   NaN"
             f_str = f"{front_min:.2f}" if math.isfinite(front_min) else " inf"
             self.get_logger().info(
                 f"right: D={D_str}m a={a_str}deg lost={int(wall_lost_now)} "
@@ -247,10 +242,7 @@ class WallLineNavNode(Node):
         if self.mode == "turn_right":
             if self.turn_until is not None and now < self.turn_until:
                 now_s = now.nanoseconds * 1e-9
-                if (
-                    self._last_turn_log is None
-                    or (now_s - self._last_turn_log) >= 0.5
-                ):
+                if self._last_turn_log is None or (now_s - self._last_turn_log) >= 0.5:
                     self._last_turn_log = now_s
                     remaining = (self.turn_until - now).nanoseconds * 1e-9
                     self.get_logger().info(

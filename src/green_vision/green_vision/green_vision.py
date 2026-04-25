@@ -96,6 +96,7 @@ class GreenVisionNode(Node):
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             hsv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
             mask = cv2.inRange(hsv_image, self.lower_hsv, self.upper_hsv)
+            mask[: int(mask.shape[0] * 2 / 3), :] = 0
 
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE

@@ -78,7 +78,7 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 2.4)
+        self.declare_parameter("line_kp", 2.0)
         # Cap below full lock; the scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 1.35)
         self.declare_parameter("line_goal_timeout_s", 1.0)

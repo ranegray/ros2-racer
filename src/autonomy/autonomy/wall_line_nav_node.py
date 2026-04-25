@@ -32,8 +32,6 @@ class WallLineNavNode(Node):
 
         self.latest_follow_point: PointStamped | None = None
         self.line_visible = False
-        self.last_line_offset = None
-        self.last_line_seen_sec = None
 
         self.mode = "forward"
         self.turn_until = None
@@ -80,13 +78,11 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 1.8)
+        self.declare_parameter("line_kp", 1.6)
         # Cap below full lock; the scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 1.35)
         self.declare_parameter("line_goal_timeout_s", 1.0)
-        self.declare_parameter("line_lost_speed", 0.25)
-        self.declare_parameter("line_lost_steering", 0.65)
-        self.declare_parameter("line_lost_steer_timeout_s", 1.0)
+        self.declare_parameter("line_missing_speed", 0.25)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
@@ -115,11 +111,7 @@ class WallLineNavNode(Node):
         self.line_kp = self.get_parameter("line_kp").value
         self.line_max_angular = self.get_parameter("line_max_angular").value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
-        self.line_lost_speed = self.get_parameter("line_lost_speed").value
-        self.line_lost_steering = self.get_parameter("line_lost_steering").value
-        self.line_lost_steer_timeout_s = self.get_parameter(
-            "line_lost_steer_timeout_s"
-        ).value
+        self.line_missing_speed = self.get_parameter("line_missing_speed").value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
@@ -265,24 +257,11 @@ class WallLineNavNode(Node):
             else None
         )
         if follow is None:
-            cmd.linear.x = float(self.line_lost_speed)
-            now_s = now.nanoseconds / 1e9
-            line_seen_recently = (
-                self.last_line_seen_sec is not None
-                and (now_s - self.last_line_seen_sec) <= self.line_lost_steer_timeout_s
-            )
-            if self.last_line_offset is not None and line_seen_recently:
-                cmd.angular.z = (
-                    float(self.line_lost_steering)
-                    if self.last_line_offset >= 0.0
-                    else -float(self.line_lost_steering)
-                )
+            cmd.linear.x = float(self.line_missing_speed)
             self.cmd_pub.publish(cmd)
             return
 
         offset = (follow[0] - self.line_target_x) / self.line_image_center_x
-        self.last_line_offset = offset
-        self.last_line_seen_sec = now.nanoseconds / 1e9
         raw = self.line_kp * offset
         # tanh saturates softly inside ±line_max_angular instead of clamping.
         cmd.angular.z = float(

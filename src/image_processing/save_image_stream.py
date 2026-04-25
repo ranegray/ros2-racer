@@ -24,8 +24,9 @@ frames = pipe.wait_for_frames(5000)   # 5s timeout
 color  = frames.get_color_frame()
 img = np.asanyarray(color.get_data())[:,:,::-1]  # already BGR
 im = plot.imshow(img)
-i = 0
+
 def update(self):
+        i = 0
         frames = pipe.wait_for_frames(5000)   # 5s timeout
         color  = frames.get_color_frame()
         img = np.asanyarray(color.get_data())[:,:,::-1]  # already BGR

@@ -80,13 +80,15 @@ FRONT_AVOID_GATE    =   1.5  # m — AVOID only engages once center_dist drops b
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=   0.4  # m — ignore asymmetry smaller than this (hallway side-wall noise)
 FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
-# Ray > N × centre_dist means it passed through a gap — skip AVOID entirely
-# Only applies when far enough from wall; close in, AVOID must always engage
+# Ray > N × centre_dist means the diagonal passed through a gap — skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT   = 3.0
-FRONT_AVOID_MIN_GAP_DIST    = 1.5  # m — below this, relative gap skip is disabled
-# Glass on either side reads 8-11m; real corridor walls read < 7.5m.
-# Either diagonal exceeding this means it bounced through glass — asymmetry is garbage.
-FRONT_AVOID_ABS_GAP_THRESH  = 8.0  # m
+# Diagonal exceeding this absolute distance means it bounced through a gap — asymmetry is garbage.
+FRONT_AVOID_ABS_GAP_THRESH  = 6.0  # m
+# Robust gate: require ≥N short readings in the centre cone before AVOID opens.
+# A single glass / specular-metal stray short return won't trip it.
+FRONT_AVOID_MIN_HITS        = 3
+# Require N consecutive triggering scans before committing — filters one-frame glitches.
+AVOID_CONFIRM_SCANS         = 2
 
 # PD + feedback gains
 KP            = 0.8
@@ -137,6 +139,9 @@ class WallFollowerNode(Node):
 
         # Both-walls-gone corner state machine
         self._both_lost_since  = None  # seconds when both walls first gone
+
+        # AVOID multi-scan confirmation
+        self._avoid_run = 0
 
         # IMU yaw rate (rad/s)
         self._yaw_rate = 0.0
@@ -280,6 +285,15 @@ class WallFollowerNode(Node):
             good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
             return float(np.min(good)) if len(good) else float(msg.range_max)
 
+        def cone_kth_min(idx, k):
+            # k-th smallest valid reading (0-indexed). range_max if fewer than k+1 valid readings.
+            # Robust to glass/specular single-point shorts: require ≥k+1 consistent close hits.
+            v = ranges[idx]
+            good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
+            if len(good) <= k:
+                return float(msg.range_max)
+            return float(np.partition(good, k)[k])
+
         now_s = self.get_clock().now().nanoseconds * 1e-9
 
         left_dist   = cone_mean(self._left_idx)
@@ -308,39 +322,49 @@ class WallFollowerNode(Node):
             return
 
         # --- Crash avoidance: steer away from angled approaching wall ---
-        # Uses narrow center_dist so a gap straight ahead won't trigger it.
+        # Uses a robust narrow centre measure (k-th min) so glass/metal single-point
+        # shorts don't open the gate. Also requires AVOID_CONFIRM_SCANS consecutive
+        # triggering scans to commit — filters one-frame glitches.
         # Skip when:
         #   (a) BOTH GONE recovery is committed to turning right, OR
         #   (b) F1TENTH is actively tracking a right turn (α > 10°) — at that point
         #       AVOID just adds a spurious hard-right push into whatever the diagonal
         #       hits (windows, doors). F1TENTH is already commanding the correct steer.
+        center_robust  = cone_kth_min(self._center_idx, FRONT_AVOID_MIN_HITS - 1)
         in_recovery    = (self._both_lost_since is not None
                           and (now_s - self._both_lost_since) > COAST_S)
         in_right_turn  = (math.isfinite(D_ahead) and D_ahead < MAX_PLAUSIBLE
                           and math.degrees(alpha) > 10.0)
-        if center_dist < FRONT_AVOID_GATE and not in_recovery and not in_right_turn:
+        gate_met = (center_robust < FRONT_AVOID_GATE
+                    and not in_recovery and not in_right_turn)
+        if gate_met:
+            self._avoid_run += 1
+        else:
+            self._avoid_run = 0
+
+        if gate_met and self._avoid_run >= AVOID_CONFIRM_SCANS:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
-                max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
+                max_diag = center_robust * FRONT_AVOID_MAX_DIAG_MULT
                 # Relative gap: diagonal >> centre (window/doorway further away)
-                rel_gap = center_dist > FRONT_AVOID_MIN_GAP_DIST and (front_L > max_diag or front_R > max_diag)
-                # Absolute gap: either diagonal bounced through glass (reads 8-11m)
+                rel_gap = front_L > max_diag or front_R > max_diag
+                # Absolute gap: either diagonal bounced through a gap (glass/open space)
                 abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH or front_L > FRONT_AVOID_ABS_GAP_THRESH
                 if rel_gap or abs_gap:
                     # A diagonal went through a gap (window / doorway).
                     # Asymmetry is garbage — skip AVOID, fall through to wall-following.
                     reason = "abs" if abs_gap else "rel"
                     self.get_logger().info(
-                        f"AVOID SKIP ({reason}) ctr={center_dist:.2f}m  "
+                        f"AVOID SKIP ({reason}) ctr={center_robust:.2f}m  "
                         f"L={front_L:.2f} R={front_R:.2f}  max={max_diag:.2f}"
                     )
                 else:
                     asymmetry = front_R - front_L
-                    speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
+                    speed = max(TURN_SPEED, BASE_SPEED * (center_robust / FRONT_AVOID_THRESH))
                     if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
                         # Angled wall (\ or /) — steer away from it
-                        proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
+                        proximity = 1.0 - center_robust / FRONT_AVOID_THRESH
                         avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
                         avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
                         cmd = Twist()
@@ -348,7 +372,7 @@ class WallFollowerNode(Node):
                         cmd.angular.z = avoid_steer
                         self._publish(cmd)
                         self.get_logger().info(
-                            f"AVOID ctr={center_dist:.2f}m  "
+                            f"AVOID ctr={center_robust:.2f}m  "
                             f"L={front_L:.2f} R={front_R:.2f}  "
                             f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
                         )
@@ -359,7 +383,7 @@ class WallFollowerNode(Node):
                         cmd.angular.z = MAX_STEER  # full-lock RIGHT
                         self._publish(cmd)
                         self.get_logger().info(
-                            f"SOLID WALL ctr={center_dist:.2f}m  "
+                            f"SOLID WALL ctr={center_robust:.2f}m  "
                             f"L={front_L:.2f} R={front_R:.2f}  turning right"
                         )
                     return

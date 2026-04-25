@@ -18,12 +18,12 @@ import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
 from std_msgs.msg import Float32
 from sensor_msgs.msg import LaserScan, Image
 from geometry_msgs.msg import PointStamped, Twist
 
 
-RIGHT_OPEN_MIN_SAMPLES = 10
 FRONT_CLEAR_MIN_SAMPLES = 3
 RIGHT_TURN_COOLDOWN_S = 2.0
 
@@ -48,6 +48,19 @@ class WallLineNavNode(Node):
         self.cooldown_until = None
         self.right_open_scan_run = 0
         self.last_scan_stamp = None
+        self.latest_front_clear = False
+
+        # Spike-detector state: last accepted (D_ahead, alpha) and its time.
+        self._last_valid_D = None
+        self._last_valid_alpha = None
+        self._last_valid_time = None
+        self._last_debug_log = None
+
+        # Line-PD state. Mirrors line_control.py's smoothed-offset PD.
+        self._line_smoothed_offset = 0.0
+        self._line_prev_offset = 0.0
+        self._line_prev_offset_time = None
+        self._line_last_steer = 0.0
 
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
@@ -56,21 +69,67 @@ class WallLineNavNode(Node):
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
+        # Two-ray F1TENTH-style estimator borrowed from claude/wall-following.
+        # The perpendicular beam vanishing or the projected wall distance
+        # exceeding `right_open_distance` IS the right-corner signal.
         self.declare_parameter("right_open_distance", 4.0)
-        self.declare_parameter("right_open_fraction", 0.80)
         self.declare_parameter("right_open_required_scans", 8)
+        self.declare_parameter("ray_a_deg", -45.0)
+        self.declare_parameter("ray_b_deg", -90.0)
+        self.declare_parameter("ray_half_window_deg", 2.0)
+        self.declare_parameter("look_ahead", 0.5)
+        # Spike rejector: a real corner grows D and alpha smoothly across
+        # scans; a window glints them within one scan. Spikes are NEUTRAL —
+        # they neither advance nor reset the lost-run counter.
+        self.declare_parameter("max_d_jump", 0.8)
+        self.declare_parameter("max_alpha_jump_deg", 60.0)
+        self.declare_parameter("spike_stale_s", 0.7)
         self.declare_parameter("front_clear_distance", 0.8)
+        self.declare_parameter("debug_log_period_s", 0.5)
+        # Line-follow PD on /line_follow_point. Image is 640 wide; the
+        # camera is mounted off-centre so a perfectly-centred line lands
+        # at column ~400, which is the steering target.
+        self.declare_parameter("line_image_width", 640)
+        self.declare_parameter("line_target_x", 400.0)
+        self.declare_parameter("line_kp", 0.8)
+        self.declare_parameter("line_kd", 1.5)
+        # Cap kept gentle — the scripted right turn handles hard corners,
+        # so the line PD never needs full lock.
+        self.declare_parameter("line_max_angular", 1.0)
+        self.declare_parameter("line_steering_trim", 0.12)
+        self.declare_parameter("line_offset_alpha", 0.5)
+        self.declare_parameter("line_goal_timeout_s", 1.0)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
         self.right_turn_steering = self.get_parameter("right_turn_steering").value
         self.right_turn_duration = self.get_parameter("right_turn_duration").value
         self.right_open_distance = self.get_parameter("right_open_distance").value
-        self.right_open_fraction = self.get_parameter("right_open_fraction").value
         self.right_open_required_scans = self.get_parameter(
             "right_open_required_scans"
         ).value
+        self.ray_a_deg = self.get_parameter("ray_a_deg").value
+        self.ray_b_deg = self.get_parameter("ray_b_deg").value
+        self.ray_half_window = math.radians(
+            self.get_parameter("ray_half_window_deg").value
+        )
+        self.look_ahead = self.get_parameter("look_ahead").value
+        self.max_d_jump = self.get_parameter("max_d_jump").value
+        self.max_alpha_jump = math.radians(
+            self.get_parameter("max_alpha_jump_deg").value
+        )
+        self.spike_stale_s = self.get_parameter("spike_stale_s").value
         self.front_clear_distance = self.get_parameter("front_clear_distance").value
+        self.debug_log_period_s = self.get_parameter("debug_log_period_s").value
+        line_image_width = float(self.get_parameter("line_image_width").value)
+        self.line_image_center_x = line_image_width / 2.0
+        self.line_target_x = self.get_parameter("line_target_x").value
+        self.line_kp = self.get_parameter("line_kp").value
+        self.line_kd = self.get_parameter("line_kd").value
+        self.line_max_angular = self.get_parameter("line_max_angular").value
+        self.line_steering_trim = self.get_parameter("line_steering_trim").value
+        self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
+        self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
@@ -102,10 +161,68 @@ class WallLineNavNode(Node):
             return
         self.last_scan_stamp = stamp
 
-        if self._detect_clear_right_hallway(msg):
+        D_ahead, alpha = self._right_wall_state(msg)
+        front_min = self._forward_min(msg)
+        front_clear = (
+            math.isfinite(front_min) and front_min >= self.front_clear_distance
+        )
+        self.latest_front_clear = front_clear
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+
+        # Spike check: a finite reading that jumped too far from the last
+        # accepted scan within the staleness window. NaN bypasses (no
+        # finite delta to compute) — true wall-loss isn't a "spike."
+        is_spike = False
+        if (
+            math.isfinite(D_ahead)
+            and self._last_valid_time is not None
+            and (now - self._last_valid_time) < self.spike_stale_s
+        ):
+            dD = abs(D_ahead - self._last_valid_D)
+            da = abs(alpha - self._last_valid_alpha)
+            if dD > self.max_d_jump or da > self.max_alpha_jump:
+                is_spike = True
+        if (
+            self._last_valid_time is not None
+            and (now - self._last_valid_time) >= self.spike_stale_s
+        ):
+            self._last_valid_D = None
+            self._last_valid_alpha = None
+            self._last_valid_time = None
+
+        wall_lost_now = (
+            not math.isfinite(D_ahead)
+        ) or D_ahead > self.right_open_distance
+
+        if is_spike:
+            pass
+        elif wall_lost_now:
             self.right_open_scan_run += 1
         else:
             self.right_open_scan_run = 0
+            self._last_valid_D = D_ahead
+            self._last_valid_alpha = alpha
+            self._last_valid_time = now
+
+        if (
+            self._last_debug_log is None
+            or (now - self._last_debug_log) >= self.debug_log_period_s
+        ):
+            self._last_debug_log = now
+            D_str = f"{D_ahead:5.2f}" if math.isfinite(D_ahead) else "  NaN"
+            a_str = (
+                f"{math.degrees(alpha):+6.1f}"
+                if math.isfinite(alpha)
+                else "   NaN"
+            )
+            f_str = f"{front_min:.2f}" if math.isfinite(front_min) else " inf"
+            self.get_logger().info(
+                f"right: D={D_str}m a={a_str}deg lost={int(wall_lost_now)} "
+                f"spike={int(is_spike)} run={self.right_open_scan_run}/"
+                f"{self.right_open_required_scans} fwd={f_str}m "
+                f"fclear={int(front_clear)}"
+            )
 
     def front_distance_callback(self, msg: Float32):
         self.latest_front_distance = msg.data
@@ -139,12 +256,14 @@ class WallLineNavNode(Node):
             self.right_open_scan_run = 0
 
         if (
-            self.cooldown_until is None or now >= self.cooldown_until
-        ) and self.right_open_scan_run >= self.right_open_required_scans:
+            (self.cooldown_until is None or now >= self.cooldown_until)
+            and self.right_open_scan_run >= self.right_open_required_scans
+            and self.latest_front_clear
+        ):
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
             self.get_logger().info(
-                "Clear right hallway detected; turning right "
+                "Right wall absent; committing scripted right turn "
                 f"v={self.turn_linear_speed:.2f} steer={self.right_turn_steering:.2f}"
             )
             cmd.linear.x = self.turn_linear_speed
@@ -152,50 +271,102 @@ class WallLineNavNode(Node):
             self.cmd_pub.publish(cmd)
             return
 
-        cmd.linear.x = self.forward_speed
+        self._publish_line_follow(now)
+
+    def _publish_line_follow(self, now):
+        cmd = Twist()
+        follow = self._extract_line_point(self.latest_follow_point, now)
+        if follow is None:
+            # Fresh follow point missing — hold last steer at base speed so a
+            # one-frame detection drop doesn't jolt the heading.
+            cmd.linear.x = float(self.forward_speed)
+            cmd.angular.z = float(self._line_last_steer)
+            self.cmd_pub.publish(cmd)
+            return
+
+        offset = (follow[0] - self.line_target_x) / self.line_image_center_x
+        self._line_smoothed_offset = (
+            self.line_offset_alpha * offset
+            + (1.0 - self.line_offset_alpha) * self._line_smoothed_offset
+        )
+
+        now_s = now.nanoseconds * 1e-9
+        if self._line_prev_offset_time is None:
+            d_offset = 0.0
+        else:
+            dt = now_s - self._line_prev_offset_time
+            d_offset = (
+                (self._line_smoothed_offset - self._line_prev_offset) / dt
+                if dt > 0
+                else 0.0
+            )
+        self._line_prev_offset = self._line_smoothed_offset
+        self._line_prev_offset_time = now_s
+
+        raw = self.line_kp * self._line_smoothed_offset + self.line_kd * d_offset
+        # tanh saturates softly inside ±line_max_angular instead of clamping.
+        steer = self.line_max_angular * math.tanh(
+            (raw + self.line_steering_trim) / self.line_max_angular
+        )
+        self._line_last_steer = steer
+
+        cmd.linear.x = float(self.forward_speed)
+        cmd.angular.z = float(steer)
         self.cmd_pub.publish(cmd)
 
-    def _detect_clear_right_hallway(self, scan: LaserScan) -> bool:
-        right_open_frac, right_total = self._sector_open_fraction(
-            scan, -100.0, -55.0, self.right_open_distance
-        )
-        front_ranges = self._sector_ranges(scan, -15.0, 15.0)
-        if (
-            right_total < RIGHT_OPEN_MIN_SAMPLES
-            or len(front_ranges) < FRONT_CLEAR_MIN_SAMPLES
-        ):
-            return False
+    def _extract_line_point(self, msg: PointStamped | None, now):
+        if msg is None:
+            return None
+        age_s = (now - Time.from_msg(msg.header.stamp)).nanoseconds / 1e9
+        if age_s > self.line_goal_timeout_s:
+            return None
+        if msg.point.x == 0.0 and msg.point.y == 0.0:
+            return None
+        return (msg.point.x, msg.point.y)
 
-        front_min = min(front_ranges)
+    @staticmethod
+    def _wrap(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
 
-        return (
-            right_open_frac >= self.right_open_fraction
-            and front_min >= self.front_clear_distance
-        )
-
-    def _sector_open_fraction(
-        self, scan: LaserScan, start_deg: float, end_deg: float, threshold: float
-    ):
-        # A beam is "open" only with strong evidence: inf/NaN (no return) or
-        # a finite reading past `threshold`. Anything else — including
-        # finite-but-out-of-range glitches — counts as blocked, biasing
-        # toward false-negatives so a misfire can't steer off the line.
-        start = math.radians(start_deg)
-        end = math.radians(end_deg)
-        open_count = 0
-        total = 0
-        for i, r in enumerate(scan.ranges):
-            angle = scan.angle_min + i * scan.angle_increment
-            if angle < start or angle > end:
+    def _ray_at_angle(self, msg: LaserScan, target_angle: float) -> float:
+        # Mean of valid rays within ray_half_window of target_angle. NaN
+        # if none — that's the "beam missing" signal the caller relies on.
+        target = self._wrap(target_angle)
+        readings = []
+        for i, r in enumerate(msg.ranges):
+            if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
                 continue
-            total += 1
-            if math.isinf(r) or math.isnan(r):
-                open_count += 1
-            elif scan.range_min <= r <= scan.range_max and r >= threshold:
-                open_count += 1
-        if total == 0:
-            return 0.0, 0
-        return open_count / total, total
+            angle = self._wrap(msg.angle_min + i * msg.angle_increment)
+            if abs(self._wrap(angle - target)) <= self.ray_half_window:
+                readings.append(r)
+        if not readings:
+            return float("nan")
+        return sum(readings) / len(readings)
+
+    def _right_wall_state(self, msg: LaserScan):
+        # F1TENTH two-ray estimator. Returns (D_ahead, alpha) where alpha
+        # is the car's heading vs the right wall (0 = parallel) and
+        # D_ahead is the perpendicular distance projected `look_ahead`
+        # in front. Perp beam (-90°) missing => wall absent.
+        a = self._ray_at_angle(msg, math.radians(self.ray_a_deg))
+        b = self._ray_at_angle(msg, math.radians(self.ray_b_deg))
+        a_ok = math.isfinite(a)
+        b_ok = math.isfinite(b)
+        if not b_ok:
+            return float("nan"), float("nan")
+        if not a_ok:
+            return b, 0.0
+        theta = abs(math.radians(self.ray_b_deg - self.ray_a_deg))
+        alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
+        D_now = b * math.cos(alpha)
+        D_ahead = D_now + self.look_ahead * math.sin(alpha)
+        return D_ahead, alpha
+
+    def _forward_min(self, msg: LaserScan) -> float:
+        front_ranges = self._sector_ranges(msg, -15.0, 15.0)
+        if len(front_ranges) < FRONT_CLEAR_MIN_SAMPLES:
+            return float("inf")
+        return min(front_ranges)
 
     def _sector_ranges(self, scan: LaserScan, start_deg: float, end_deg: float):
         start = math.radians(start_deg)

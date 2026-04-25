@@ -33,6 +33,7 @@ class WallLineNavNode(Node):
         self.latest_follow_point: PointStamped | None = None
         self.line_visible = False
         self.line_smoothed_offset = 0.0
+        self.line_prev_offset = 0.0
         self.line_last_steer = 0.0
 
         self.mode = "forward"
@@ -81,13 +82,17 @@ class WallLineNavNode(Node):
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
         self.declare_parameter("line_kp", 1.4)
+        # D term on smoothed offset reacts to drift before P alone would.
+        self.declare_parameter("line_kd", 1.5)
+        # Right bias counters mechanical left-pull on the wheels.
+        self.declare_parameter("line_steering_trim", 0.0)
         # Keep line steering gentle; scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)
         self.declare_parameter("line_missing_speed", 0.25)
         self.declare_parameter("line_offset_alpha", 0.25)
-        self.declare_parameter("line_offset_deadband", 0.06)
-        self.declare_parameter("line_max_steer_step", 0.08)
+        self.declare_parameter("line_offset_deadband", 0.0)
+        self.declare_parameter("line_max_steer_step", 0.2)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
@@ -114,6 +119,8 @@ class WallLineNavNode(Node):
         self.line_image_center_x = line_image_width / 2.0
         self.line_target_x = self.get_parameter("line_target_x").value
         self.line_kp = self.get_parameter("line_kp").value
+        self.line_kd = self.get_parameter("line_kd").value
+        self.line_steering_trim = self.get_parameter("line_steering_trim").value
         self.line_max_angular = self.get_parameter("line_max_angular").value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
         self.line_missing_speed = self.get_parameter("line_missing_speed").value
@@ -267,6 +274,8 @@ class WallLineNavNode(Node):
         )
         if follow is None:
             cmd.linear.x = float(self.line_missing_speed)
+            # Reset prev_offset so re-acquire doesn't cause a D spike.
+            self.line_prev_offset = self.line_smoothed_offset
             self.line_last_steer = self._slew_line_steer(0.0)
             cmd.angular.z = float(self.line_last_steer)
             self.cmd_pub.publish(cmd)
@@ -280,7 +289,14 @@ class WallLineNavNode(Node):
         if abs(self.line_smoothed_offset) < self.line_offset_deadband:
             self.line_smoothed_offset = 0.0
 
-        raw = self.line_kp * self.line_smoothed_offset
+        d_offset = (self.line_smoothed_offset - self.line_prev_offset) / 0.05
+        self.line_prev_offset = self.line_smoothed_offset
+
+        raw = (
+            self.line_kp * self.line_smoothed_offset
+            + self.line_kd * d_offset
+            + self.line_steering_trim
+        )
         # tanh saturates softly inside ±line_max_angular instead of clamping.
         target_steer = float(
             self.line_max_angular * math.tanh(raw / self.line_max_angular)

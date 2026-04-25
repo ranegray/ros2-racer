@@ -61,7 +61,7 @@ class WallLineNavNode(Node):
         # The perpendicular beam vanishing or the projected wall distance
         # exceeding `right_open_distance` IS the right-corner signal.
         self.declare_parameter("right_open_distance", 4.0)
-        self.declare_parameter("right_open_required_scans", 8)
+        self.declare_parameter("right_open_required_scans", 6)
         self.declare_parameter("ray_a_deg", -45.0)
         self.declare_parameter("ray_b_deg", -90.0)
         self.declare_parameter("ray_half_window_deg", 2.0)
@@ -233,9 +233,8 @@ class WallLineNavNode(Node):
             )
 
         if (
-            (self.cooldown_until is None or now >= self.cooldown_until)
-            and self.right_open_scan_run >= self.right_open_required_scans
-        ):
+            self.cooldown_until is None or now >= self.cooldown_until
+        ) and self.right_open_scan_run >= self.right_open_required_scans:
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
             self._last_turn_log = None
@@ -345,6 +344,7 @@ class WallLineNavNode(Node):
         D_now = b * math.cos(alpha)
         D_ahead = D_now + self.look_ahead * math.sin(alpha)
         return D_ahead, alpha
+
 
 def main(args=None):
     rclpy.init(args=args)

@@ -2,11 +2,7 @@
 wall_line_nav_node.py
 Inputs:
   /scan                       sensor_msgs/LaserScan
-  /perception/front_distance  std_msgs/Float32  (lidar-derived front clearance)
-  /camera/color/image_raw     sensor_msgs/Image (raw RealSense color frame)
   /line_follow_point          geometry_msgs/PointStamped (from line_detector)
-  /line_lookahead_point       geometry_msgs/PointStamped (from line_detector)
-  /line_detector/debug_image  sensor_msgs/Image (line detector debug overlay)
 
 Output:
   /cmd_vel                    geometry_msgs/Twist
@@ -19,8 +15,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from std_msgs.msg import Float32
-from sensor_msgs.msg import LaserScan, Image
+from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PointStamped, Twist
 
 FRONT_CLEAR_MIN_SAMPLES = 3
@@ -35,12 +30,7 @@ class WallLineNavNode(Node):
         self._setup_subscriptions()
         self._setup_publishers()
 
-        self.latest_scan: LaserScan | None = None
-        self.latest_front_distance: float | None = None
-        self.latest_image: Image | None = None
         self.latest_follow_point: PointStamped | None = None
-        self.latest_lookahead_point: PointStamped | None = None
-        self.latest_line_debug_image: Image | None = None
 
         self.mode = "forward"
         self.turn_until = None
@@ -54,13 +44,6 @@ class WallLineNavNode(Node):
         self._last_valid_alpha = None
         self._last_valid_time = None
         self._last_debug_log = None
-
-        # Line-PD state.
-        self._line_smoothed_offset = 0.0
-        self._line_prev_offset = 0.0
-        self._line_prev_offset_time = None
-        self._line_smoothed_d_offset = 0.0
-        self._line_last_steer = 0.0
 
         # Throttle for the "turn active" status log (Hz-rate spam guard).
         self._last_turn_log = None
@@ -89,23 +72,14 @@ class WallLineNavNode(Node):
         self.declare_parameter("spike_stale_s", 0.7)
         self.declare_parameter("front_clear_distance", 0.8)
         self.declare_parameter("debug_log_period_s", 0.5)
-        # Line-follow PD on /line_follow_point. Image is 640 wide; the
+        # Line-follow P control on /line_follow_point. Image is 640 wide; the
         # camera is mounted off-centre so a perfectly-centred line lands
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
         self.declare_parameter("line_kp", 0.9)
-        self.declare_parameter("line_kd", 0.18)
-        self.declare_parameter("line_lookahead_kp", 0.45)
         # Cap below full lock; the scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 1.35)
-        self.declare_parameter("line_offset_alpha", 0.35)
-        self.declare_parameter("line_d_alpha", 0.25)
-        self.declare_parameter("line_offset_deadband", 0.03)
-        self.declare_parameter("line_max_steer_step", 0.12)
-        self.declare_parameter("line_min_speed", 0.22)
-        self.declare_parameter("line_speed_steer_scale", 0.65)
-        self.declare_parameter("line_speed_curve_scale", 0.50)
         self.declare_parameter("line_goal_timeout_s", 1.0)
 
         self.forward_speed = self.get_parameter("forward_speed").value
@@ -133,47 +107,21 @@ class WallLineNavNode(Node):
         self.line_image_center_x = line_image_width / 2.0
         self.line_target_x = self.get_parameter("line_target_x").value
         self.line_kp = self.get_parameter("line_kp").value
-        self.line_kd = self.get_parameter("line_kd").value
-        self.line_lookahead_kp = self.get_parameter("line_lookahead_kp").value
         self.line_max_angular = self.get_parameter("line_max_angular").value
-        self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
-        self.line_d_alpha = self.get_parameter("line_d_alpha").value
-        self.line_offset_deadband = self.get_parameter("line_offset_deadband").value
-        self.line_max_steer_step = self.get_parameter("line_max_steer_step").value
-        self.line_min_speed = self.get_parameter("line_min_speed").value
-        self.line_speed_steer_scale = self.get_parameter(
-            "line_speed_steer_scale"
-        ).value
-        self.line_speed_curve_scale = self.get_parameter(
-            "line_speed_curve_scale"
-        ).value
         self.line_goal_timeout_s = self.get_parameter("line_goal_timeout_s").value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
             LaserScan, "/scan", self.scan_callback, qos_profile_sensor_data
         )
-        self.front_distance_sub = self.create_subscription(
-            Float32, "/perception/front_distance", self.front_distance_callback, 10
-        )
-        self.image_sub = self.create_subscription(
-            Image, "/camera/color/image_raw", self.image_callback, 10
-        )
         self.follow_point_sub = self.create_subscription(
             PointStamped, "/line_follow_point", self.follow_point_callback, 10
-        )
-        self.lookahead_point_sub = self.create_subscription(
-            PointStamped, "/line_lookahead_point", self.lookahead_point_callback, 10
-        )
-        self.line_debug_image_sub = self.create_subscription(
-            Image, "/line_detector/debug_image", self.line_debug_image_callback, 1
         )
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
 
     def scan_callback(self, msg: LaserScan):
-        self.latest_scan = msg
         stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
         if stamp == self.last_scan_stamp:
             return
@@ -238,20 +186,8 @@ class WallLineNavNode(Node):
                 f"fclear={int(front_clear)}"
             )
 
-    def front_distance_callback(self, msg: Float32):
-        self.latest_front_distance = msg.data
-
-    def image_callback(self, msg: Image):
-        self.latest_image = msg
-
     def follow_point_callback(self, msg: PointStamped):
         self.latest_follow_point = msg
-
-    def lookahead_point_callback(self, msg: PointStamped):
-        self.latest_lookahead_point = msg
-
-    def line_debug_image_callback(self, msg: Image):
-        self.latest_line_debug_image = msg
 
     def control_loop(self):
         now = self.get_clock().now()
@@ -278,11 +214,6 @@ class WallLineNavNode(Node):
             self.cooldown_until = now + Duration(seconds=RIGHT_TURN_COOLDOWN_S)
             self.right_open_scan_run = 0
             self._last_turn_log = None
-            self._line_last_steer = 0.0
-            self._line_smoothed_offset = 0.0
-            self._line_prev_offset = 0.0
-            self._line_prev_offset_time = None
-            self._line_smoothed_d_offset = 0.0
             self.get_logger().info(
                 f"[turn] complete: handing back to line PD; "
                 f"cooldown {RIGHT_TURN_COOLDOWN_S:.1f}s"
@@ -309,83 +240,21 @@ class WallLineNavNode(Node):
 
         self._publish_line_follow(now)
 
-    def _slew_line_steer(self, target):
-        delta = max(
-            -self.line_max_steer_step,
-            min(self.line_max_steer_step, target - self._line_last_steer),
-        )
-        self._line_last_steer += delta
-        return self._line_last_steer
-
     def _publish_line_follow(self, now):
         cmd = Twist()
         follow = self._extract_line_point(self.latest_follow_point, now)
-        lookahead = self._extract_line_point(self.latest_lookahead_point, now)
         if follow is None:
-            # Fresh follow point missing: bleed steering back toward zero and
-            # crawl instead of driving on stale line geometry.
-            cmd.linear.x = float(self.forward_speed * 0.4)
-            cmd.angular.z = float(self._slew_line_steer(0.0))
-            self._line_prev_offset_time = None
-            self._line_smoothed_d_offset = 0.0
+            # Fresh follow point missing: stop instead of driving on stale line geometry.
             self.cmd_pub.publish(cmd)
             return
 
         offset = (follow[0] - self.line_target_x) / self.line_image_center_x
-        lookahead_offset = None
-        if lookahead is not None:
-            lookahead_offset = (
-                lookahead[0] - self.line_target_x
-            ) / self.line_image_center_x
-
-        self._line_smoothed_offset = (
-            self.line_offset_alpha * offset
-            + (1.0 - self.line_offset_alpha) * self._line_smoothed_offset
-        )
-
-        now_s = now.nanoseconds * 1e-9
-        if self._line_prev_offset_time is None:
-            d_offset = 0.0
-        else:
-            dt = now_s - self._line_prev_offset_time
-            d_offset = (
-                (self._line_smoothed_offset - self._line_prev_offset) / dt
-                if dt > 0
-                else 0.0
-            )
-        self._line_smoothed_d_offset = (
-            self.line_d_alpha * d_offset
-            + (1.0 - self.line_d_alpha) * self._line_smoothed_d_offset
-        )
-        self._line_prev_offset = self._line_smoothed_offset
-        self._line_prev_offset_time = now_s
-
-        if lookahead_offset is None:
-            curve = 0.0
-        else:
-            curve = lookahead_offset - self._line_smoothed_offset
-
-        raw = (
-            self.line_kp * self._line_smoothed_offset
-            + self.line_kd * self._line_smoothed_d_offset
-            + self.line_lookahead_kp * curve
-        )
-        if abs(raw) < self.line_offset_deadband:
-            raw = 0.0
+        raw = self.line_kp * offset
         # tanh saturates softly inside ±line_max_angular instead of clamping.
-        target_steer = self.line_max_angular * math.tanh(raw / self.line_max_angular)
-        steer = self._slew_line_steer(target_steer)
-
-        steer_frac = min(1.0, abs(steer) / self.line_max_angular)
-        curve_frac = min(1.0, abs(curve))
-        speed_scale = max(
-            self.line_speed_steer_scale * steer_frac,
-            self.line_speed_curve_scale * curve_frac,
+        cmd.angular.z = float(
+            self.line_max_angular * math.tanh(raw / self.line_max_angular)
         )
-        cmd.linear.x = float(
-            max(self.line_min_speed, self.forward_speed * (1.0 - speed_scale))
-        )
-        cmd.angular.z = float(steer)
+        cmd.linear.x = float(self.forward_speed)
         self.cmd_pub.publish(cmd)
 
     def _extract_line_point(self, msg: PointStamped | None, now):

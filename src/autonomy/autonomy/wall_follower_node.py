@@ -53,10 +53,15 @@ SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 
 # Sticky recovery: require N consecutive valid scans to exit lost mode
 LOST_RECOVERY_SCANS =     3
+# Confirm GONE: require N consecutive bad scans before declaring right wall lost.
+# Prevents single-frame phantoms (glass / specular metal) from triggering recovery branches.
+LOST_CONFIRM_SCANS  =     2
 
 # Corner handling (both walls gone)
-COAST_S             =   0.3  # s — coast straight before committing
+COAST_S             =   0.6  # s — coast straight before committing
 COMMIT_TURN_S       =   2.0  # s — duration of full-lock right turn
+# Require N consecutive both-gone scans before the BOTH GONE state machine starts.
+BOTH_LOST_CONFIRM_SCANS = 2
 
 # Left wall
 LEFT_CONE_DEG       =    20  # ± degrees around +90° for left-wall rays
@@ -136,9 +141,11 @@ class WallFollowerNode(Node):
         # Right-wall sticky-recovery state
         self._right_lost_since = None  # seconds when right wall first went absent
         self._valid_run        = 0     # consecutive valid scans since last loss
+        self._lost_run         = 0     # consecutive bad scans (for LOST_CONFIRM_SCANS gate)
 
         # Both-walls-gone corner state machine
         self._both_lost_since  = None  # seconds when both walls first gone
+        self._both_lost_run    = 0     # consecutive both-gone scans (for confirm gate)
 
         # AVOID multi-scan confirmation
         self._avoid_run = 0
@@ -409,25 +416,29 @@ class WallFollowerNode(Node):
             self._last_valid_D = self._last_valid_alpha = self._last_valid_time = None
 
         # --- Right-wall loss + sticky recovery ---
-        right_gone_now = (
+        # Require LOST_CONFIRM_SCANS consecutive bad scans to declare lost (resists
+        # phantom glass/metal dropouts), then LOST_RECOVERY_SCANS valid to recover.
+        right_gone_raw = (
             not math.isfinite(D_ahead) or D_ahead > MAX_PLAUSIBLE or is_spike
         )
 
-        if right_gone_now:
+        if right_gone_raw:
+            self._lost_run += 1
             self._valid_run = 0
-            if self._right_lost_since is None:
-                self._right_lost_since = now_s
         else:
+            self._lost_run = 0
             self._valid_run += 1
             self._last_valid_D     = D_ahead
             self._last_valid_alpha = alpha
             self._last_valid_time  = now_s
 
-        # Still "lost" until N consecutive valid scans confirm recovery
-        right_gone = right_gone_now or (
-            self._right_lost_since is not None
-            and self._valid_run < LOST_RECOVERY_SCANS
-        )
+        # Confirm lost only after N consecutive bad scans
+        if self._lost_run >= LOST_CONFIRM_SCANS and self._right_lost_since is None:
+            self._right_lost_since = now_s
+
+        # Sticky lost: stay "gone" until N consecutive valid scans
+        right_gone = (self._right_lost_since is not None
+                      and self._valid_run < LOST_RECOVERY_SCANS)
         if not right_gone:
             self._right_lost_since = None
 
@@ -435,35 +446,56 @@ class WallFollowerNode(Node):
 
         # ==============================================================
         # CASE 1: Both walls gone → coast then timed right turn
+        # Entry requires BOTH_LOST_CONFIRM_SCANS consecutive both-gone scans.
+        # Once past the coast phase, the turn stays committed for the full
+        # COMMIT_TURN_S even if a wall reappears (otherwise mid-corner wall
+        # reacquisition hands a half-finished turn to the weaker F1TENTH PD).
         # ==============================================================
-        if right_gone and left_gone:
-            if self._both_lost_since is None:
-                self._both_lost_since = now_s
+        both_gone_now = right_gone and left_gone
+        if both_gone_now:
+            self._both_lost_run += 1
+        else:
+            self._both_lost_run = 0
+
+        if (self._both_lost_run >= BOTH_LOST_CONFIRM_SCANS
+                and self._both_lost_since is None):
+            self._both_lost_since = now_s
+
+        if self._both_lost_since is not None:
             lost_for = now_s - self._both_lost_since
 
-            self._prev_error = self._prev_d_error = 0.0
-            self._prev_time  = now_s
-
-            cmd = Twist()
-            cmd.linear.x = TURN_SPEED
             if lost_for < COAST_S:
-                cmd.angular.z = 0.0
-                mode = "coast"
+                # Coast phase — bail if walls return before commit.
+                if not both_gone_now:
+                    self._both_lost_since = None
+                    self._both_lost_run = 0
+                else:
+                    self._prev_error = self._prev_d_error = 0.0
+                    self._prev_time  = now_s
+                    cmd = Twist()
+                    cmd.linear.x = TURN_SPEED
+                    cmd.angular.z = 0.0
+                    self._publish(cmd)
+                    self.get_logger().info(
+                        f"BOTH GONE ({lost_for:.2f}s) coast  left={left_dist:.2f}"
+                    )
+                    return
             elif lost_for < COAST_S + COMMIT_TURN_S:
+                # Turn phase — committed, ignore wall reappearance.
+                self._prev_error = self._prev_d_error = 0.0
+                self._prev_time  = now_s
+                cmd = Twist()
+                cmd.linear.x = TURN_SPEED
                 cmd.angular.z = MAX_STEER   # full-lock RIGHT (positive = right)
-                mode = "turn"
+                self._publish(cmd)
+                self.get_logger().info(
+                    f"BOTH GONE ({lost_for:.2f}s) turn  left={left_dist:.2f}"
+                )
+                return
             else:
-                cmd.angular.z = 0.0         # release; restarts next scan if still lost
+                # Release — restarts next scan if still lost.
                 self._both_lost_since = None
-                mode = "release"
-
-            self._publish(cmd)
-            self.get_logger().info(
-                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
-            )
-            return
-
-        self._both_lost_since = None  # at least one wall present
+                self._both_lost_run = 0
 
         # ==============================================================
         # CASE 2: Only right wall gone → entranceway, go straight

@@ -101,6 +101,9 @@ def generate_launch_description():
             output="screen",
         ),
 
+        # Tuned line-vision detector from jc/camera-line-navigation.
+        # Publishes nav points and /line_detector/debug_image; telemetry_node
+        # republishes the debug image to /telemetry/line_debug for the dashboard.
         Node(
             package="perception",
             executable="line_detector",

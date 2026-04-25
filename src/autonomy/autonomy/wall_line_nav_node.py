@@ -248,14 +248,13 @@ class WallLineNavNode(Node):
 
     def _publish_line_follow(self, now):
         cmd = Twist()
+        cmd.linear.x = float(self.forward_speed)
         follow = (
             self._extract_line_point(self.latest_follow_point, now)
             if self.line_visible
             else None
         )
         if follow is None:
-            # Line missing: keep moving forward instead of freezing.
-            cmd.linear.x = float(self.forward_speed)
             self.cmd_pub.publish(cmd)
             return
 
@@ -265,7 +264,6 @@ class WallLineNavNode(Node):
         cmd.angular.z = float(
             self.line_max_angular * math.tanh(raw / self.line_max_angular)
         )
-        cmd.linear.x = float(self.forward_speed)
         self.cmd_pub.publish(cmd)
 
     def _extract_line_point(self, msg: PointStamped | None, now):

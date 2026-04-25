@@ -13,10 +13,10 @@ cfg  = rs.config()
 cfg.enable_stream(rs.stream.color, W, H, rs.format.bgr8, FPS)
 j = 0
 path = os.getcwd()
-dirname = os.path.join(path, 'r/run{}'.format(j))
+dirname = os.path.join(path, 'run{}'.format(j))
 while os.path.exists(dirname):          
    j = j+1
-   dirname = os.path.join(path, 'r/run{}'.format(j))
+   dirname = os.path.join(path, 'run{}'.format(j))
 os.makedirs(dirname)
 print("Starting pipeline…")
 pipe.start(cfg)
@@ -30,10 +30,10 @@ def update(self):
         color  = frames.get_color_frame()
         img = np.asanyarray(color.get_data())[:,:,::-1]  # already BGR
         im.set_data(img)
-        imgname = 'r/Cameraframe{x}.png'.format(i)
+        imgname = 'Imageframe{x}.png'.format(i)
         while os.path.exists(os.path.join(dirname,imgname)):                 
             i = i+1            
-            imgname = 'r/Cameraframe{x}.png'.format(i)
+            imgname = 'Imageframe{x}.png'.format(i)
         image.imsave(os.path.join(dirname, imgname), img)
         return im
 

@@ -75,17 +75,18 @@ FRONT_STOP_THRESH   =  0.20  # m — hard emergency turn (narrow cone only)
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
-FRONT_AVOID_THRESH  =   2.5  # m — start applying angle correction
+FRONT_AVOID_THRESH  =   2.5  # m — corner-detection / speed-scaling reference distance
+FRONT_AVOID_GATE    =   1.5  # m — AVOID only engages once center_dist drops below this
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
-FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
+FRONT_AVOID_MIN_ASYM=   0.4  # m — ignore asymmetry smaller than this (hallway side-wall noise)
 FRONT_AVOID_KP      =   3.0  # gain on asymmetry → steer correction
 # Ray > N × centre_dist means it passed through a gap — skip AVOID entirely
 # Only applies when far enough from wall; close in, AVOID must always engage
 FRONT_AVOID_MAX_DIAG_MULT   = 3.0
 FRONT_AVOID_MIN_GAP_DIST    = 1.5  # m — below this, relative gap skip is disabled
-# Glass doors on the right read 8-11m; real corridor walls read < 7.5m.
-# Only the RIGHT diagonal needs this check — that's the only side with doors.
-FRONT_AVOID_ABS_GAP_THRESH  = 8.0  # m — if front_R exceeds this, skip AVOID
+# Glass on either side reads 8-11m; real corridor walls read < 7.5m.
+# Either diagonal exceeding this means it bounced through glass — asymmetry is garbage.
+FRONT_AVOID_ABS_GAP_THRESH  = 8.0  # m
 
 # PD + feedback gains
 KP            = 0.8
@@ -317,15 +318,15 @@ class WallFollowerNode(Node):
                           and (now_s - self._both_lost_since) > COAST_S)
         in_right_turn  = (math.isfinite(D_ahead) and D_ahead < MAX_PLAUSIBLE
                           and math.degrees(alpha) > 10.0)
-        if center_dist < FRONT_AVOID_THRESH and not in_recovery and not in_right_turn:
+        if center_dist < FRONT_AVOID_GATE and not in_recovery and not in_right_turn:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
                 # Relative gap: diagonal >> centre (window/doorway further away)
                 rel_gap = center_dist > FRONT_AVOID_MIN_GAP_DIST and (front_L > max_diag or front_R > max_diag)
-                # Absolute gap: right diagonal through a glass door (reads 8-11m, only ever on right)
-                abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH
+                # Absolute gap: either diagonal bounced through glass (reads 8-11m)
+                abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH or front_L > FRONT_AVOID_ABS_GAP_THRESH
                 if rel_gap or abs_gap:
                     # A diagonal went through a gap (window / doorway).
                     # Asymmetry is garbage — skip AVOID, fall through to wall-following.

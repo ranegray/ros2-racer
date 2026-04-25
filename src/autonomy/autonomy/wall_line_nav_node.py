@@ -80,7 +80,7 @@ class WallLineNavNode(Node):
         # at column ~400, which is the steering target.
         self.declare_parameter("line_image_width", 640)
         self.declare_parameter("line_target_x", 400.0)
-        self.declare_parameter("line_kp", 0.8)
+        self.declare_parameter("line_kp", 1.4)
         # Keep line steering gentle; scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)

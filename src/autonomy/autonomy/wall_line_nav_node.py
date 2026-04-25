@@ -187,6 +187,8 @@ class WallLineNavNode(Node):
             )
 
     def follow_point_callback(self, msg: PointStamped):
+        if msg.point.x == 0.0 and msg.point.y == 0.0:
+            return
         self.latest_follow_point = msg
 
     def control_loop(self):
@@ -262,8 +264,6 @@ class WallLineNavNode(Node):
             return None
         age_s = (now - Time.from_msg(msg.header.stamp)).nanoseconds / 1e9
         if age_s > self.line_goal_timeout_s:
-            return None
-        if msg.point.x == 0.0 and msg.point.y == 0.0:
             return None
         return (msg.point.x, msg.point.y)
 

@@ -31,10 +31,10 @@ def update(self):
         color  = frames.get_color_frame()
         img = np.asanyarray(color.get_data())[:,:,::-1]  # already BGR
         im.set_data(img)
-        imgname = 'Imageframe{x}.png'.format(i)
+        imgname = 'Imageframe{}.png'.format(i)
         while os.path.exists(os.path.join(dirname,imgname)):                 
             i = i+1            
-            imgname = 'Imageframe{x}.png'.format(i)
+            imgname = 'Imageframe{}.png'.format(i)
         image.imsave(os.path.join(dirname, imgname), img)
         return im
 

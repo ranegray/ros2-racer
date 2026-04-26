@@ -78,6 +78,8 @@ FRONT_AVOID_THRESH  =   2.8  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction
+FRONT_AVOID_KD      =   1.5  # gain on rate-of-change of asymmetry
+FRONT_AVOID_D_ALPHA =   0.5  # low-pass on D term (0=frozen, 1=raw)
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
@@ -122,6 +124,10 @@ class WallFollowerNode(Node):
         self._prev_error   = 0.0
         self._prev_d_error = 0.0
         self._prev_time    = None
+
+        # AVOID D-term state
+        self._prev_asymmetry   = 0.0
+        self._prev_d_asymmetry = 0.0
 
         # Spike detector state
         self._last_valid_D     = None
@@ -273,10 +279,17 @@ class WallFollowerNode(Node):
                 else:
                     asymmetry = front_R - front_L
                     speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
+                    self._prev_asymmetry = asymmetry
                     if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
                         # Angled wall (\ or /) — steer away from it
                         proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
-                        avoid_steer = FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
+                        # D term: rate of change of asymmetry (low-pass filtered)
+                        raw_d_asym = asymmetry - self._prev_asymmetry
+                        d_asym = (FRONT_AVOID_D_ALPHA * raw_d_asym
+                                  + (1.0 - FRONT_AVOID_D_ALPHA) * self._prev_d_asymmetry)
+                        self._prev_d_asymmetry = d_asym
+                        avoid_steer = (FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
+                                       + FRONT_AVOID_KD * d_asym)
                         avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
                         cmd = Twist()
                         cmd.linear.x  = speed
@@ -285,7 +298,7 @@ class WallFollowerNode(Node):
                         self.get_logger().info(
                             f"AVOID ctr={center_dist:.2f}m  "
                             f"L={front_L:.2f} R={front_R:.2f}  "
-                            f"asym={asymmetry:+.2f}  steer={avoid_steer:+.2f}"
+                            f"asym={asymmetry:+.2f}  d={d_asym:+.2f}  steer={avoid_steer:+.2f}"
                         )
                     else:
                         # Symmetric solid wall (--------) — always turn right

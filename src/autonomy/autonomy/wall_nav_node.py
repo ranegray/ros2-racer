@@ -144,6 +144,12 @@ class WallNavNode(Node):
         self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
+        # Speed during the lost cycle (coast + turn + release). Decoupled
+        # from v_min so cruise tuning doesn't change corner geometry. The
+        # commit_turn_s default (2.0s at full lock) was sized for ~45°/s
+        # rotation, which on this rover requires ~0.4 m/s forward — at
+        # lower speeds a 2s commit only completes a partial turn.
+        self.declare_parameter("commit_speed", 0.4)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common
@@ -345,6 +351,7 @@ class WallNavNode(Node):
             lost_for = now - self._lost_since
             coast_s = self.get_parameter("lost_coast_s").value
             turn_s = self.get_parameter("commit_turn_s").value
+            commit_speed = self.get_parameter("commit_speed").value
 
             # Reset PD state so it doesn't spike when the wall returns.
             self._prev_error = 0.0
@@ -352,7 +359,7 @@ class WallNavNode(Node):
             self._prev_time = now
 
             cmd = Twist()
-            cmd.linear.x = float(v_min)
+            cmd.linear.x = float(commit_speed)
 
             if lost_for < coast_s:
                 # Brief gap (doorway, window) — coast straight.
@@ -377,7 +384,7 @@ class WallNavNode(Node):
             self.cmd_pub.publish(cmd)
             self.get_logger().info(
                 f"wall lost ({lost_for:.2f}s) {mode}: "
-                f"steer={cmd.angular.z:+.2f} v={v_min:.2f} "
+                f"steer={cmd.angular.z:+.2f} v={commit_speed:.2f} "
                 f"run={self._valid_run}/{recovery_scans}"
             )
             return

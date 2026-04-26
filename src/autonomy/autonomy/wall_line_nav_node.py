@@ -86,7 +86,7 @@ class WallLineNavNode(Node):
         # Keep line steering gentle; scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)
-        self.declare_parameter("line_missing_speed", 0.30)
+        self.declare_parameter("line_missing_speed", 0.28)
         self.declare_parameter("line_offset_alpha", 0.25)
         self.declare_parameter("line_offset_deadband", 0.0)
         self.declare_parameter("line_max_steer_step", 0.2)

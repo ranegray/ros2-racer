@@ -97,8 +97,8 @@ MAX_ERROR     = 0.4   # clip distance error before PD
 SIGN          = -1.0
 STEERING_TRIM =  0.0  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
-BASE_SPEED    =  0.40  # m/s nominal
-TURN_SPEED    =  0.34  # m/s minimum (wall-lost / corners)
+BASE_SPEED    =  0.38  # m/s nominal
+TURN_SPEED    =  0.28  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 

@@ -74,7 +74,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
-FRONT_AVOID_THRESH  =   1.7  # m — start applying angle correction
+FRONT_AVOID_THRESH  =   2.0  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
@@ -82,6 +82,15 @@ FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
 FRONT_AVOID_ABS_GAP_THRESH = 2.0   # m — diagonal > this absolute → window/glass door
+
+# Right-turn junction detection
+# When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
+# When RAY_A reads close → doorway recess → go straight as normal.
+RIGHT_OPEN_THRESH   = 1.5   # m — RAY_A beyond this = right hallway confirmed
+# Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
+# add extra rightward steering kick to start turning before the wall fully disappears.
+ALPHA_TURN_THRESH_DEG = 15.0  # degrees — alpha above this triggers the boost
+ALPHA_TURN_KP         =  1.5  # gain on (alpha - threshold) → extra right steer
 
 # PD + feedback gains
 KP            = 0.8
@@ -375,20 +384,35 @@ class WallFollowerNode(Node):
         self._both_lost_since = None  # at least one wall present
 
         # ==============================================================
-        # CASE 2: Only right wall gone → entranceway, go straight
+        # CASE 2: Only right wall gone
+        # Use RAY_A (-45°) to distinguish:
+        #   far read → open right hallway → turn right
+        #   close read → doorway recess → go straight
         # ==============================================================
         if right_gone:
-            steer = 0.0
-            if left_dist < WALL_SAFE_DIST:
-                steer = KP * (WALL_SAFE_DIST - left_dist)
-                steer = min(steer, MAX_STEER)
-            cmd = Twist()
-            cmd.linear.x  = BASE_SPEED
-            cmd.angular.z = steer
-            self._publish(cmd)
-            self.get_logger().info(
-                f"RIGHT GONE  left={left_dist:.2f}  steer={steer:.2f}"
-            )
+            ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
+            if not math.isfinite(ray_a) or ray_a > RIGHT_OPEN_THRESH:
+                # Right hallway confirmed — turn right
+                cmd = Twist()
+                cmd.linear.x  = TURN_SPEED
+                cmd.angular.z = MAX_STEER
+                self._publish(cmd)
+                self.get_logger().info(
+                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  turning right"
+                )
+            else:
+                # Doorway recess — go straight, nudge away from left if close
+                steer = 0.0
+                if left_dist < WALL_SAFE_DIST:
+                    steer = KP * (WALL_SAFE_DIST - left_dist)
+                    steer = min(steer, MAX_STEER)
+                cmd = Twist()
+                cmd.linear.x  = BASE_SPEED
+                cmd.angular.z = steer
+                self._publish(cmd)
+                self.get_logger().info(
+                    f"RIGHT GONE+DOORWAY  ray_a={ray_a:.2f}m  left={left_dist:.2f}  steer={steer:.2f}"
+                )
             return
 
         # ==============================================================
@@ -413,6 +437,13 @@ class WallFollowerNode(Node):
         # Left-wall balance: when right is farther than left (drifted left), push right
         if not left_gone:
             pre_sign -= BALANCE_KP * (D_ahead - left_dist)
+
+        # Alpha turn boost: when wall is actively swinging right (approaching junction),
+        # add extra rightward kick proportional to how far alpha exceeds the threshold.
+        # Applied after balance so it's stronger — subtracting pre_sign = more RIGHT.
+        alpha_deg = math.degrees(alpha)
+        if alpha_deg > ALPHA_TURN_THRESH_DEG:
+            pre_sign -= ALPHA_TURN_KP * (alpha_deg - ALPHA_TURN_THRESH_DEG)
 
         steering = SIGN * pre_sign
         steering = max(-MAX_STEER, min(MAX_STEER, steering))

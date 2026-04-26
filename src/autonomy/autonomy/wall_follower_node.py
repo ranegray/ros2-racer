@@ -74,7 +74,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
-FRONT_AVOID_THRESH  =   2.0  # m — start applying angle correction
+FRONT_AVOID_THRESH  =   2.8  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction

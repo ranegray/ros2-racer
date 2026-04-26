@@ -77,7 +77,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 FRONT_AVOID_THRESH  =   2.0  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP      =   2.0  # gain on asymmetry → steer correction
+FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
@@ -108,8 +108,8 @@ MAX_ERROR     = 0.4   # clip distance error before PD
 SIGN          = -1.0
 STEERING_TRIM =  0.0  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
-BASE_SPEED    =  0.85  # m/s nominal
-TURN_SPEED    =  0.55  # m/s minimum (wall-lost / corners)
+BASE_SPEED    =  0.95  # m/s nominal
+TURN_SPEED    =  0.45  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 

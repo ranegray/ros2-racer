@@ -128,6 +128,8 @@ def generate_launch_description():
             'control_frequency': 20.0,
             'imu_frequency': 20.0,
             'use_velocity_feedback': True,
+            'kp_speed': 120.0,
+            'ki_speed': 60.0,
         }],
     )
 

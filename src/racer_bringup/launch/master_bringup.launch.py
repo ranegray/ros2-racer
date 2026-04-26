@@ -7,9 +7,10 @@ Brings up the shared hardware and infrastructure stack in a single command:
   2. RealSense       (rs_stream    → /camera/*)
   3. Wall perception (depth_node   → /perception/front_distance)
   4. Hardware bridge (robo_rover   → /imu/*, /rover/armed, subscribes /cmd_vel)
-  5. Wall follower   (autonomy     → /cmd_vel)
-  6. Telemetry       (telemetry    → /telemetry/*)
-  7. rosbridge       (rosbridge_server WebSocket on port 9090)
+  5. rf2o odometry   (rf2o_laser_odometry → /odom_rf2o)
+  6. Wall follower   (autonomy     → /cmd_vel)
+  7. Telemetry       (telemetry    → /telemetry/*)
+  8. rosbridge       (rosbridge_server WebSocket on port 9090)
 
 Usage:
     ros2 launch racer_bringup master_bringup.launch.py
@@ -130,7 +131,24 @@ def generate_launch_description():
         }],
     )
 
-    # ── 5. Wall Follower ─────────────────────────────────────────────────────
+    # ── 5. rf2o Laser Odometry ───────────────────────────────────────────────
+    rf2o_node = Node(
+        package='rf2o_laser_odometry',
+        executable='rf2o_laser_odometry_node',
+        name='rf2o_laser_odometry',
+        parameters=[{
+            'laser_scan_topic': '/scan',
+            'odom_topic': '/odom_rf2o',
+            'publish_tf': False,
+            'base_frame_id': 'base_link',
+            'odom_frame_id': 'odom',
+            'freq': 10.0,
+        }],
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 6. Wall Follower ─────────────────────────────────────────────────────
     wall_follower_node = Node(
         package='autonomy',
         executable='wall_follower_node',
@@ -182,6 +200,7 @@ def generate_launch_description():
         realsense_node,
         depth_node,
         rover_node,
+        rf2o_node,
         wall_follower_node,
         telemetry_node,
         rosbridge_launch,

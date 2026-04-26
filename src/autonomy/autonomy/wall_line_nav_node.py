@@ -53,14 +53,14 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.32)
+        self.declare_parameter("forward_speed", 0.33)
         self.declare_parameter("turn_linear_speed", 0.40)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
         # Two-ray F1TENTH-style estimator borrowed from claude/wall-following.
         # The perpendicular beam vanishing or the projected wall distance
         # exceeding `right_open_distance` IS the right-corner signal.
-        self.declare_parameter("right_open_distance", 4.0)
+        self.declare_parameter("right_open_distance", 3.0)
         self.declare_parameter("right_open_required_scans", 6)
         self.declare_parameter("ray_a_deg", -45.0)
         self.declare_parameter("ray_b_deg", -90.0)
@@ -86,7 +86,7 @@ class WallLineNavNode(Node):
         # Keep line steering gentle; scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)
-        self.declare_parameter("line_missing_speed", 0.28)
+        self.declare_parameter("line_missing_speed", 0.30)
         self.declare_parameter("line_offset_alpha", 0.25)
         self.declare_parameter("line_offset_deadband", 0.0)
         self.declare_parameter("line_max_steer_step", 0.2)

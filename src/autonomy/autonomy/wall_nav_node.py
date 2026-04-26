@@ -71,7 +71,10 @@ class WallNavNode(Node):
         # Distance error is clipped to ±max_error before PD. Stops the
         # controller from panic-saturating when the estimator briefly
         # reports an absurd distance (window, long recess, beam glitch).
-        self.declare_parameter("max_error", 0.4)
+        # 1.5 m chosen so the controller has authority to drive ~1+ m
+        # corrections (the old 0.4 cap masked target_distance changes
+        # entirely — every error read as ±0.4 regardless of true gap).
+        self.declare_parameter("max_error", 1.5)
         # Anything beyond this is treated as "no wall visible". This is
         # also the right-turn signal: the wall vanishes and stays gone.
         self.declare_parameter("max_plausible_distance", 4.0)
@@ -95,8 +98,8 @@ class WallNavNode(Node):
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.45)
-        self.declare_parameter("target_distance", 0.8)
-        self.declare_parameter("forward_speed", 0.35)
+        self.declare_parameter("target_distance", 0.6)
+        self.declare_parameter("forward_speed", 0.45)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0°), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.
@@ -105,11 +108,13 @@ class WallNavNode(Node):
         self.declare_parameter("ray_half_window_deg", 2.0)
         self.declare_parameter("look_ahead", 0.5)
         # Slow the car down as the wall-angle |α| grows (corners, juts).
-        # 0.3 is the rolling stall floor, but 0.4 is needed to break
-        # static friction at full steering lock during a corner commit
-        # (the lost-cycle "turn" phase) — at 0.3 the car can stick mid-
-        # rotation and never complete the 90°.
-        self.declare_parameter("min_forward_speed", 0.4)
+        # With closed-loop velocity (rover_node use_velocity_feedback=true)
+        # the open-loop stall floor is gone — the PI loop saturates throttle
+        # to achieve the commanded m/s regardless of magnitude. Set this to
+        # the slowest sustainable corner speed; 0.12 lets corners be taken
+        # very slow without stalling. If you ever revert to open-loop in
+        # rover_node, raise this back to 0.3-0.4.
+        self.declare_parameter("min_forward_speed", 0.12)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)

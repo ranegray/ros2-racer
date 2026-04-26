@@ -75,6 +75,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
 FRONT_AVOID_THRESH  =   2.8  # m — start applying angle correction
+AVOID_CONFIRM_SCANS =     2  # consecutive scans below thresh before AVOID fires
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction
@@ -128,6 +129,9 @@ class WallFollowerNode(Node):
         # AVOID D-term state
         self._prev_asymmetry   = 0.0
         self._prev_d_asymmetry = 0.0
+
+        # AVOID confirm counter (debounce reflective false positives)
+        self._avoid_confirm    = 0
 
         # Spike detector state
         self._last_valid_D     = None
@@ -262,7 +266,12 @@ class WallFollowerNode(Node):
 
         # --- Crash avoidance: steer away from angled approaching wall ---
         # Uses narrow center_dist so a gap straight ahead won't trigger it.
+        # Confirm counter debounces single-frame reflective false positives.
         if center_dist < FRONT_AVOID_THRESH:
+            self._avoid_confirm += 1
+        else:
+            self._avoid_confirm = 0
+        if self._avoid_confirm >= AVOID_CONFIRM_SCANS and center_dist < FRONT_AVOID_THRESH:
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):

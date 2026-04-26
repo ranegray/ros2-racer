@@ -81,7 +81,7 @@ FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
-FRONT_AVOID_ABS_GAP_THRESH = 8.0   # m — diagonal > this absolute → window/glass door
+FRONT_AVOID_ABS_GAP_THRESH = 2.0   # m — diagonal > this absolute → window/glass door
 
 # PD + feedback gains
 KP            = 0.8

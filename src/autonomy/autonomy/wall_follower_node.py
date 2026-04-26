@@ -87,9 +87,11 @@ FRONT_AVOID_ABS_GAP_THRESH = 2.0   # m — diagonal > this absolute → window/g
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
 # When RAY_A reads close → doorway recess → go straight as normal.
 RIGHT_OPEN_THRESH   = 1.5   # m — RAY_A beyond this = right hallway confirmed
+# RAY_A > MAX_PLAUSIBLE means it went through a window/gap, not a real hallway
+# (real hallway opposite wall is ~1.5-3m away; windows read 8m+)
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.
-ALPHA_TURN_THRESH_DEG = 15.0  # degrees — alpha above this triggers the boost
+ALPHA_TURN_THRESH_DEG = 25.0  # degrees — alpha above this triggers the boost
 ALPHA_TURN_KP         =  1.5  # gain on (alpha - threshold) → extra right steer
 
 # PD + feedback gains
@@ -382,7 +384,7 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone:
             ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
-            if not math.isfinite(ray_a) or ray_a > RIGHT_OPEN_THRESH:
+            if math.isfinite(ray_a) and RIGHT_OPEN_THRESH < ray_a < MAX_PLAUSIBLE:
                 # Right hallway confirmed — turn right
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED
@@ -392,7 +394,7 @@ class WallFollowerNode(Node):
                     f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  turning right"
                 )
             else:
-                # Doorway recess — go straight, nudge away from left if close
+                # Doorway recess or window (ray_a too close or too far) — go straight
                 steer = 0.0
                 if left_dist < WALL_SAFE_DIST:
                     steer = KP * (WALL_SAFE_DIST - left_dist)

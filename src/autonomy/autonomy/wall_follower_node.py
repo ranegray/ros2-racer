@@ -81,7 +81,7 @@ FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
-FRONT_AVOID_ABS_GAP_THRESH = 2.0   # m — diagonal > this absolute → window/glass door
+FRONT_AVOID_ABS_GAP_THRESH = 3.5   # m — diagonal > this absolute → window/glass door
 
 # Right-turn junction detection
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.

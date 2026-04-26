@@ -77,7 +77,7 @@ FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 FRONT_AVOID_THRESH  =   2.0  # m — start applying angle correction
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP      =   1.5  # gain on asymmetry → steer correction
+FRONT_AVOID_KP      =   2.0  # gain on asymmetry → steer correction
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
@@ -251,15 +251,6 @@ class WallFollowerNode(Node):
         front_dist  = cone_min(self._front_idx)   # wide — used for slowing only
         center_dist = cone_min(self._center_idx)  # narrow — used for stop/avoid
         D_ahead, alpha = self._right_wall_state(msg)
-
-        # --- Emergency stop: only if straight-ahead (narrow) cone is blocked ---
-        if center_dist < FRONT_STOP_THRESH:
-            cmd = Twist()
-            cmd.linear.x  = TURN_SPEED * 0.5
-            cmd.angular.z = -MAX_STEER   # hard LEFT (negative = left on this rover)
-            self._publish(cmd)
-            self.get_logger().info(f"EMERGENCY ctr={center_dist:.2f}m — hard left")
-            return
 
         # --- Crash avoidance: steer away from angled approaching wall ---
         # Uses narrow center_dist so a gap straight ahead won't trigger it.

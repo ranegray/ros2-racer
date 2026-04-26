@@ -126,6 +126,7 @@ def generate_launch_description():
             'baud_rate': rover_baudrate,
             'control_frequency': 20.0,
             'imu_frequency': 20.0,
+            'use_velocity_feedback': True,
         }],
     )
 

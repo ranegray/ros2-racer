@@ -30,9 +30,7 @@ class ArduPilotRoverNode(Node):
 
         # Closed-loop velocity control. Setpoint is cmd_vel.linear.x in m/s,
         # feedback is twist.linear.x from the rf2o LIDAR-odometry topic.
-        # Defaults to False so the legacy open-loop throttle map (with the
-        # 0.3 m/s deadband) is preserved unless explicitly enabled.
-        self.declare_parameter('use_velocity_feedback', False)
+        self.declare_parameter('use_velocity_feedback', True)
         self.declare_parameter('odom_topic', '/odom_rf2o')
         self.declare_parameter('kp_speed', 220.0)        # MAVLink throttle units / (m/s)
         self.declare_parameter('ki_speed', 150.0)        # MAVLink throttle units / (m/s * s)

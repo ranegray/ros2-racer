@@ -66,7 +66,7 @@ BALANCE_KP          =   0.3  # left-wall balance correction gain
 # Front safety
 FRONT_CONE_DEG      =    40  # ± degrees around 0° — wide cone for slowing only
 CENTER_CONE_DEG     =    15  # ± degrees around 0° — narrow cone for stop/avoid (ignores side walls)
-FRONT_SLOW_THRESH   =   0.8  # m — start slowing (wide cone)
+FRONT_SLOW_THRESH   =   2.0  # m — start slowing based on nearest front reading
 FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
 
 
@@ -463,11 +463,12 @@ class WallFollowerNode(Node):
         steering = SIGN * pre_sign
         steering = max(-MAX_STEER, min(MAX_STEER, steering))
 
-        # Speed: ease off as wall angle grows; only slow for things directly ahead (center cone)
+        # Speed: ease off as wall angle grows; slow for nearest front obstacle
         alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
         speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
-        if center_dist < FRONT_SLOW_THRESH:
-            speed = max(TURN_SPEED, speed * center_dist / FRONT_SLOW_THRESH)
+        near_dist = min(d for d in (center_dist, front_dist) if math.isfinite(d)) if (math.isfinite(center_dist) or math.isfinite(front_dist)) else float('inf')
+        if near_dist < FRONT_SLOW_THRESH:
+            speed = max(TURN_SPEED, speed * near_dist / FRONT_SLOW_THRESH)
 
         cmd = Twist()
         cmd.linear.x  = speed

@@ -61,11 +61,21 @@ def generate_launch_description():
         default_value='50',
         description='JPEG compression quality for camera frames (0-100)',
     )
+    use_velocity_feedback_arg = DeclareLaunchArgument(
+        'use_velocity_feedback',
+        default_value='false',
+        description=(
+            'If true, rover_node closes a PI loop on cmd_vel.linear.x using '
+            '/odom_rf2o.twist.linear.x as feedback. If false, falls back to '
+            'the legacy open-loop throttle map.'
+        ),
+    )
 
     lidar_port = LaunchConfiguration('lidar_port')
     lidar_baudrate = LaunchConfiguration('lidar_baudrate')
     rover_port = LaunchConfiguration('rover_port')
     rover_baudrate = LaunchConfiguration('rover_baudrate')
+    use_velocity_feedback = LaunchConfiguration('use_velocity_feedback')
 
     # ── 1. LIDAR ─────────────────────────────────────────────────────────────
     lidar_node = Node(
@@ -103,6 +113,44 @@ def generate_launch_description():
             'baud_rate': rover_baudrate,
             'control_frequency': 20.0,
             'imu_frequency': 20.0,
+            'use_velocity_feedback': use_velocity_feedback,
+            'odom_topic': '/odom_rf2o',
+        }],
+    )
+
+    # ── 3a. Static TF: base_link -> laser ───────────────────────────────────
+    # Required by rf2o (it calls lookupTransform on the first scan; without
+    # any TF involving 'laser' in the buffer, it throws and rf2o silently
+    # drops every scan thereafter). Identity is fine — we only need the
+    # velocity scalar from rf2o, not a precise rigid-body offset.
+    static_tf_base_to_laser = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_base_to_laser',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'laser'],
+        output='log',
+    )
+
+    # ── 3b. LIDAR scan-match odometry (rf2o) ────────────────────────────────
+    # Publishes /odom_rf2o with twist.linear.x in m/s. Used as the velocity
+    # feedback source for rover_node's closed-loop controller.
+    rf2o_node = Node(
+        package='rf2o_laser_odometry',
+        executable='rf2o_laser_odometry_node',
+        name='rf2o_laser_odometry',
+        output='log',
+        parameters=[{
+            'laser_scan_topic': '/scan',
+            'odom_topic': '/odom_rf2o',
+            'publish_tf': False,
+            'base_frame_id': 'base_link',
+            'odom_frame_id': 'odom',
+            # MUST be empty — see comment in our wrapper launch file. The
+            # source's default is '/base_pose_ground_truth' which silently
+            # disables scan processing.
+            'init_pose_from_topic': '',
+            # Match the lidar's ~7.6 Hz scan rate; faster just spams warnings.
+            'freq': 10.0,
         }],
     )
 
@@ -140,6 +188,7 @@ def generate_launch_description():
         rover_baudrate_arg,
         telemetry_rate_arg,
         image_quality_arg,
+        use_velocity_feedback_arg,
 
         # Startup banner
         LogInfo(msg='[racer_bringup] Starting Phase 1 hardware and infrastructure stack...'),
@@ -147,6 +196,8 @@ def generate_launch_description():
         # Nodes (sensors first, bridge, then aggregators/infrastructure)
         lidar_node,
         realsense_node,
+        static_tf_base_to_laser,
+        rf2o_node,
         rover_node,
         telemetry_node,
         rosbridge_launch,

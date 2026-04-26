@@ -132,6 +132,17 @@ def generate_launch_description():
     )
 
     # ── 5. rf2o Laser Odometry ───────────────────────────────────────────────
+    # Static TF required by rf2o: calls lookupTransform(base_link, laser) on
+    # every scan and silently drops it if the transform isn't available.
+    static_tf_base_to_laser = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_base_to_laser',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'laser'],
+        output='log',
+        condition=IfCondition(enable_lidar),
+    )
+
     rf2o_node = Node(
         package='rf2o_laser_odometry',
         executable='rf2o_laser_odometry_node',
@@ -142,6 +153,7 @@ def generate_launch_description():
             'publish_tf': False,
             'base_frame_id': 'base_link',
             'odom_frame_id': 'odom',
+            'init_pose_from_topic': '',  # empty = don't wait for ground truth
             'freq': 10.0,
         }],
         output='screen',
@@ -199,8 +211,9 @@ def generate_launch_description():
         lidar_node,
         realsense_node,
         depth_node,
-        rover_node,
+        static_tf_base_to_laser,
         rf2o_node,
+        rover_node,
         wall_follower_node,
         telemetry_node,
         rosbridge_launch,

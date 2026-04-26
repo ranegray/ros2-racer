@@ -7,8 +7,9 @@ Brings up the shared hardware and infrastructure stack in a single command:
   2. RealSense       (rs_stream    → /camera/*)
   3. Wall perception (depth_node   → /perception/front_distance)
   4. Hardware bridge (robo_rover   → /imu/*, /rover/armed, subscribes /cmd_vel)
-  5. Telemetry       (telemetry    → /telemetry/*)
-  6. rosbridge       (rosbridge_server WebSocket on port 9090)
+  5. Wall follower   (autonomy     → /cmd_vel)
+  6. Telemetry       (telemetry    → /telemetry/*)
+  7. rosbridge       (rosbridge_server WebSocket on port 9090)
 
 Usage:
     ros2 launch racer_bringup master_bringup.launch.py
@@ -128,7 +129,16 @@ def generate_launch_description():
         }],
     )
 
-    # ── 5. Telemetry Aggregator ──────────────────────────────────────────────
+    # ── 5. Wall Follower ─────────────────────────────────────────────────────
+    wall_follower_node = Node(
+        package='autonomy',
+        executable='wall_follower_node',
+        name='wall_follower_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
     telemetry_node = Node(
         package='telemetry',
         executable='telemetry_node',
@@ -141,7 +151,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 6. rosbridge WebSocket server ────────────────────────────────────────
+    # ── 7. rosbridge WebSocket server ────────────────────────────────────────
     rosbridge_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -171,6 +181,7 @@ def generate_launch_description():
         realsense_node,
         depth_node,
         rover_node,
+        wall_follower_node,
         telemetry_node,
         rosbridge_launch,
 

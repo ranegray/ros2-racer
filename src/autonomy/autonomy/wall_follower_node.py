@@ -78,7 +78,7 @@ FRONT_AVOID_THRESH  =   2.8  # m — start applying angle correction
 AVOID_CONFIRM_SCANS =     2  # consecutive scans below thresh before AVOID fires
 FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP      =   3.5  # gain on asymmetry → steer correction
+FRONT_AVOID_KP      =   2.2  # gain on asymmetry → steer correction
 FRONT_AVOID_KD      =   0.5  # gain on rate-of-change of asymmetry
 FRONT_AVOID_D_ALPHA =   0.5  # low-pass on D term (0=frozen, 1=raw)
 # Gap detection: if a diagonal reads much further than centre, it passed through

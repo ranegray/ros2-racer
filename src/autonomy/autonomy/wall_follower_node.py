@@ -412,7 +412,9 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone:
             ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
-            if math.isfinite(ray_a) and RIGHT_OPEN_THRESH < ray_a < MAX_PLAUSIBLE:
+            # NaN/inf = no return at 45° = open space = hallway (same as far read)
+            open_hallway = (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < MAX_PLAUSIBLE)
+            if open_hallway:
                 # Right hallway confirmed — turn right
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED

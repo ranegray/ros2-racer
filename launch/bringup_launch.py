@@ -7,16 +7,17 @@ dashboard. It intentionally does not start wall_line_nav_node so the controller
 can be launched, stopped, and restarted independently with wl_nav_launch.py.
 
 Nodes launched:
-  rplidar_ros   rplidar_node            /scan
-  rs_stream     rs_stream_node          /camera/color/image_raw
-  perception    depth_node              /perception/front_distance
-  perception    line_detector           /line_follow_point, /line_lookahead_point
-  tf2_ros       static_transform_publisher  base_link -> laser
-  autonomy      odometry_node           /odom + TF odom->base_link
-  autonomy      imu_adapter_node        /imu
-  slam_toolbox  async_slam_toolbox_node /map + TF map->odom
-  robo_rover    rover_node              MAVLink driver
-  telemetry     telemetry_node          /telemetry/*
+  rplidar_ros           rplidar_node            /scan
+  rs_stream             rs_stream_node          /camera/color/image_raw
+  perception            depth_node              /perception/front_distance
+  perception            line_detector           /line_follow_point, /line_lookahead_point
+  tf2_ros               static_transform_publisher  base_link -> laser
+  autonomy              odometry_node           /odom + TF odom->base_link
+  autonomy              imu_adapter_node        /imu
+  slam_toolbox          async_slam_toolbox_node /map + TF map->odom
+  rf2o_laser_odometry   rf2o_laser_odometry_node  /odom_rf2o (velocity feedback for rover_node)
+  robo_rover            rover_node              MAVLink driver (closed-loop velocity on /odom_rf2o)
+  telemetry             telemetry_node          /telemetry/*
     - republishes /line_detector/debug_image as /telemetry/line_debug
   rosbridge_server  rosbridge WebSocket on :9090
 
@@ -153,6 +154,28 @@ def generate_launch_description():
             parameters=[slam_config],
         ),
 
+        # rf2o publishes /odom_rf2o.twist.linear.x (m/s) by scan-matching
+        # consecutive /scan frames. rover_node uses it as feedback for the
+        # closed-loop PI velocity controller.
+        Node(
+            package="rf2o_laser_odometry",
+            executable="rf2o_laser_odometry_node",
+            name="rf2o_laser_odometry",
+            output="log",
+            parameters=[{
+                "laser_scan_topic": "/scan",
+                "odom_topic": "/odom_rf2o",
+                "publish_tf": False,
+                "base_frame_id": "base_link",
+                "odom_frame_id": "odom",
+                # MUST be empty — source default '/base_pose_ground_truth'
+                # silently disables scan processing because nothing publishes it.
+                "init_pose_from_topic": "",
+                # Match the lidar's ~7.6 Hz scan rate; faster just spams warnings.
+                "freq": 10.0,
+            }],
+        ),
+
         Node(
             package="robo_rover",
             executable="rover_node",
@@ -164,6 +187,8 @@ def generate_launch_description():
                 "baud_rate": rover_baudrate,
                 "control_frequency": 20.0,
                 "imu_frequency": 20.0,
+                "use_velocity_feedback": True,
+                "odom_topic": "/odom_rf2o",
             }],
         ),
 

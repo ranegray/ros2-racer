@@ -151,7 +151,7 @@ class ProcessImage():
 
     def update(self, event=None):
         
-        img = image.imread(self.readPath)[:,:,:3]
+        #img = image.imread(self.readPath)[:,:,:3]
         if not self.readFile:
             img = self.get_sensor_data()
 

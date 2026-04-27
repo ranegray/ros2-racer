@@ -81,6 +81,7 @@ FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP      =   2.2  # gain on asymmetry → steer correction
 FRONT_AVOID_KD      =   0.5  # gain on rate-of-change of asymmetry
 FRONT_AVOID_D_ALPHA =   0.5  # low-pass on D term (0=frozen, 1=raw)
+AVOID_LEFT_GUARD_DIST = 0.5  # m — only steer left if right wall (D_ahead) is closer than this
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
@@ -306,6 +307,11 @@ class WallFollowerNode(Node):
                         avoid_steer = (FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
                                        + FRONT_AVOID_KD * d_asym)
                         avoid_steer = max(-MAX_STEER, min(MAX_STEER, avoid_steer))
+                        # Guard: only steer left if D_ahead confirms right wall is genuinely close.
+                        # Negative avoid_steer = left turn. At right-turn junctions the right
+                        # diagonal is short (wall receding) but D_ahead is safe — skip left steer.
+                        if avoid_steer < 0 and (not math.isfinite(D_ahead) or D_ahead > AVOID_LEFT_GUARD_DIST):
+                            avoid_steer = 0.0
                         cmd = Twist()
                         cmd.linear.x  = speed
                         cmd.angular.z = avoid_steer
@@ -313,7 +319,8 @@ class WallFollowerNode(Node):
                         self.get_logger().info(
                             f"AVOID ctr={center_dist:.2f}m  "
                             f"L={front_L:.2f} R={front_R:.2f}  "
-                            f"asym={asymmetry:+.2f}  d={d_asym:+.2f}  steer={avoid_steer:+.2f}"
+                            f"asym={asymmetry:+.2f}  d={d_asym:+.2f}  steer={avoid_steer:+.2f}  "
+                            f"D={D_ahead:.2f}m"
                         )
                     else:
                         # Symmetric solid wall (--------) — always turn right

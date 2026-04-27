@@ -163,6 +163,14 @@ def generate_launch_description():
         condition=IfCondition(enable_lidar),
     )
 
+    # ── 6. IMU Adapter ───────────────────────────────────────────────────────
+    imu_adapter_node = Node(
+        package='autonomy',
+        executable='imu_adapter_node',
+        name='imu_adapter_node',
+        output='log',
+    )
+
     # ── 6. Wall Follower ─────────────────────────────────────────────────────
     wall_follower_node = Node(
         package='autonomy',
@@ -170,6 +178,7 @@ def generate_launch_description():
         name='wall_follower_node',
         output='screen',
         condition=IfCondition(enable_lidar),
+        parameters=[{'speed_override': 0.7}],  # slow for mapping lap; set -1.0 to use BASE_SPEED
     )
 
     # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
@@ -273,6 +282,7 @@ def generate_launch_description():
         rf2o_node,
         rover_node,
         mkdir_map,
+        imu_adapter_node,
         wall_follower_node,
         path_recorder_node,
         path_planner_node,

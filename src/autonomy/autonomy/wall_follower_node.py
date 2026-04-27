@@ -130,6 +130,14 @@ class WallFollowerNode(Node):
     def __init__(self):
         super().__init__("wall_follower_node")
 
+        # Optional speed override via ROS parameter (e.g. slow mapping lap)
+        self.declare_parameter("speed_override", -1.0)
+        _override = self.get_parameter("speed_override").value
+        if _override > 0.0:
+            global BASE_SPEED
+            BASE_SPEED = _override
+            self.get_logger().info(f"speed_override active: BASE_SPEED={BASE_SPEED} m/s")
+
         # PD state
         self._prev_error   = 0.0
         self._prev_d_error = 0.0

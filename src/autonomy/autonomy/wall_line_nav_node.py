@@ -53,8 +53,8 @@ class WallLineNavNode(Node):
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
     def _setup_parameters(self):
-        self.declare_parameter("forward_speed", 0.15)
-        self.declare_parameter("turn_linear_speed", 0.18)
+        self.declare_parameter("forward_speed", 0.22)
+        self.declare_parameter("turn_linear_speed", 0.27)
         self.declare_parameter("right_turn_steering", 2.0)
         self.declare_parameter("right_turn_duration", 2.0)
         # Two-ray F1TENTH-style estimator borrowed from claude/wall-following.
@@ -86,7 +86,7 @@ class WallLineNavNode(Node):
         # Keep line steering gentle; scripted right turn handles hard corners.
         self.declare_parameter("line_max_angular", 0.75)
         self.declare_parameter("line_goal_timeout_s", 1.0)
-        self.declare_parameter("line_missing_speed", 0.14)
+        self.declare_parameter("line_missing_speed", 0.20)
         self.declare_parameter("line_offset_alpha", 0.25)
         self.declare_parameter("line_offset_deadband", 0.0)
         self.declare_parameter("line_max_steer_step", 0.2)

@@ -161,7 +161,7 @@ def generate_launch_description():
             package="rf2o_laser_odometry",
             executable="rf2o_laser_odometry_node",
             name="rf2o_laser_odometry",
-            output="log",
+            output="screen",
             parameters=[{
                 "laser_scan_topic": "/scan",
                 "odom_topic": "/odom_rf2o",

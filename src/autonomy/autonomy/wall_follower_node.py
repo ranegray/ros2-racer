@@ -119,7 +119,7 @@ SCAN_TIMEOUT_S      =   1.0  # s — stop rover if no scan received for this lon
 SIGN          = -1.0
 STEERING_TRIM =  0.0  # positive = trim right, negative = trim left (mechanical bias correction)
 MAX_STEER     =  2.0  # ±2.0 = full servo lock
-BASE_SPEED    =  0.95  # m/s nominal
+BASE_SPEED    =  1.10  # m/s nominal
 TURN_SPEED    =  0.45  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------

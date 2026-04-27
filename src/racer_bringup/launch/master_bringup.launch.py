@@ -203,7 +203,16 @@ def generate_launch_description():
         condition=IfCondition(enable_lidar),
     )
 
-    # ── 9. SLAM Coordinator (mode switch) ────────────────────────────────────
+    # ── 9. Path Planner (A* on SLAM map) ────────────────────────────────────
+    path_planner_node = Node(
+        package='autonomy',
+        executable='path_planner_node',
+        name='path_planner_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 10. SLAM Coordinator (mode switch) ───────────────────────────────────
     slam_coordinator_node = Node(
         package='autonomy',
         executable='slam_coordinator_node',
@@ -266,6 +275,7 @@ def generate_launch_description():
         mkdir_map,
         wall_follower_node,
         path_recorder_node,
+        path_planner_node,
         pure_pursuit_node,
         slam_coordinator_node,
         slam_toolbox_node,

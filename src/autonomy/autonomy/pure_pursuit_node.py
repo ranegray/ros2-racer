@@ -2,21 +2,27 @@
 """
 pure_pursuit_node.py
 
-Lap 2 controller: pure pursuit path tracking on the path recorded in Lap 1.
+Lap 2 controller: pure pursuit path tracking on the A*-planned path from
+path_planner_node.  Falls back to the recorded yaml path if no planned path
+has been received by the time racing mode starts.
 
 Algorithm (Ackermann-native):
-  1. Find the closest point on the recorded path.
+  1. Find the closest point on the path.
   2. Walk forward along the path until the lookahead point is L_d metres away.
   3. Compute the heading error α = angle from robot heading to lookahead point.
   4. Steering angle: δ = atan2(2 * L * sin(α), L_d)
-  5. cmd_vel: angular.z = v * tan(δ) / L
+  5. cmd_vel: angular.z = v * tan(δ) / L   (sign convention: positive = left in ROS)
 
-Parameters (ROS):
-  path_file     — path to recorded_path.yaml  (default ~/.ros/recorded_path.yaml)
-  lookahead     — L_d in metres               (default 0.5)
-  speed         — forward speed m/s           (default 0.30)
-  wheelbase     — L in metres                 (default 0.25)
-  goal_tolerance— stop when within this of final pose (default 0.3 m)
+Note on sign convention: this rover maps cmd_vel angular.z identically to
+wall_follower — positive angular.z drives left.  Pure pursuit computes α
+positive-left by convention, so the output sign is correct without inversion.
+
+Parameters:
+  path_file      — fallback yaml path  (default ~/.ros/recorded_path.yaml)
+  lookahead      — L_d in metres       (default 0.5)
+  speed          — forward speed m/s   (default 0.30)
+  wheelbase      — L in metres         (default 0.165)
+  goal_tolerance — stop when within this of final pose (default 0.3 m)
 """
 
 import math
@@ -25,6 +31,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Path
 from std_msgs.msg import String
 import tf2_ros
 
@@ -36,48 +43,67 @@ class PurePursuitNode(Node):
         self.declare_parameter("path_file", os.path.expanduser("~/.ros/recorded_path.yaml"))
         self.declare_parameter("lookahead", 0.5)
         self.declare_parameter("speed", 0.30)
-        self.declare_parameter("wheelbase", 0.25)
+        self.declare_parameter("wheelbase", 0.165)
         self.declare_parameter("goal_tolerance", 0.3)
 
-        self._path_file    = self.get_parameter("path_file").value
-        self._L_d          = self.get_parameter("lookahead").value
-        self._speed        = self.get_parameter("speed").value
-        self._L            = self.get_parameter("wheelbase").value
-        self._goal_tol     = self.get_parameter("goal_tolerance").value
+        self._path_file  = self.get_parameter("path_file").value
+        self._L_d        = self.get_parameter("lookahead").value
+        self._speed      = self.get_parameter("speed").value
+        self._L          = self.get_parameter("wheelbase").value
+        self._goal_tol   = self.get_parameter("goal_tolerance").value
 
         self._path: list[tuple[float, float]] = []
         self._closest_idx = 0
-        self._done = False
-
-        self._load_path()
-
+        self._done   = False
         self._active = False  # wait for racing mode
 
-        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
-        self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self._cmd_pub     = self.create_publisher(Twist, "cmd_vel", 10)
+
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
+        self.create_subscription(Path, "/planned_path", self._path_cb, 1)
 
         self.create_timer(0.05, self._control_loop)  # 20 Hz
         self.get_logger().info(
-            f"Pure pursuit started — {len(self._path)} waypoints, "
-            f"L_d={self._L_d} m, speed={self._speed} m/s"
+            f"Pure pursuit ready — L_d={self._L_d} m, speed={self._speed} m/s. "
+            f"Waiting for racing mode."
         )
+
+    # ------------------------------------------------------------------
+
+    def _path_cb(self, msg: Path):
+        if not msg.poses:
+            return
+        self._path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+        self._closest_idx = 0
+        self._done = False
+        self.get_logger().info(f"Received planned path with {len(self._path)} waypoints")
 
     def _mode_cb(self, msg: String):
         if msg.data == "racing" and not self._active:
             self._active = True
-            self._load_path()
-            self.get_logger().info("Mode → RACING: pure pursuit activated")
+            if not self._path:
+                self._load_fallback_path()
+            self.get_logger().info(
+                f"Mode → RACING: pure pursuit activated ({len(self._path)} waypoints)"
+            )
 
-    def _load_path(self):
+    def _load_fallback_path(self):
         try:
             with open(self._path_file) as f:
                 data = yaml.safe_load(f)
             self._path = [(p["x"], p["y"]) for p in data["poses"]]
-            self.get_logger().info(f"Loaded {len(self._path)} path points from {self._path_file}")
+            self.get_logger().warn(
+                f"No planned path received — falling back to recorded yaml "
+                f"({len(self._path)} waypoints)"
+            )
         except Exception as e:
-            self.get_logger().error(f"Failed to load path: {e}")
+            self.get_logger().error(f"Failed to load fallback path: {e}")
+
+    # ------------------------------------------------------------------
+    # Control loop
+    # ------------------------------------------------------------------
 
     def _control_loop(self):
         if not self._active or self._done or not self._path:
@@ -85,11 +111,8 @@ class PurePursuitNode(Node):
 
         try:
             tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ):
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
             return
 
         rx = tf.transform.translation.x
@@ -98,7 +121,7 @@ class PurePursuitNode(Node):
         qw = tf.transform.rotation.w
         robot_yaw = 2.0 * math.atan2(qz, qw)
 
-        # Check if we've reached the end of the path
+        # Goal reached?
         gx, gy = self._path[-1]
         if math.hypot(rx - gx, ry - gy) < self._goal_tol:
             self.get_logger().info("Goal reached — stopping")
@@ -115,7 +138,7 @@ class PurePursuitNode(Node):
             else:
                 break
 
-        # Find lookahead point: walk forward from closest until arc-length >= L_d
+        # Find lookahead point at arc-length L_d ahead of closest
         lookahead_pt = None
         accum = 0.0
         for i in range(self._closest_idx, len(self._path) - 1):
@@ -123,14 +146,12 @@ class PurePursuitNode(Node):
             bx, by = self._path[i + 1]
             seg_len = math.hypot(bx - ax, by - ay)
             if accum + seg_len >= self._L_d:
-                # Interpolate along this segment
                 t = (self._L_d - accum) / seg_len
                 lookahead_pt = (ax + t * (bx - ax), ay + t * (by - ay))
                 break
             accum += seg_len
 
         if lookahead_pt is None:
-            # Past end of path — aim for final waypoint
             lookahead_pt = self._path[-1]
 
         lx, ly = lookahead_pt
@@ -142,26 +163,23 @@ class PurePursuitNode(Node):
             self._cmd_pub.publish(Twist())
             return
 
-        # Heading error in robot frame
         target_angle = math.atan2(dy, dx)
-        alpha = target_angle - robot_yaw
-        # Normalise to [-π, π]
-        alpha = math.atan2(math.sin(alpha), math.cos(alpha))
+        alpha = math.atan2(math.sin(target_angle - robot_yaw),
+                           math.cos(target_angle - robot_yaw))
 
-        # Pure pursuit steering
         L_d_eff = max(dist, 0.1)
         delta = math.atan2(2.0 * self._L * math.sin(alpha), L_d_eff)
         angular_z = self._speed * math.tan(delta) / self._L
         angular_z = max(-2.0, min(2.0, angular_z))
 
         cmd = Twist()
-        cmd.linear.x = self._speed
+        cmd.linear.x  = self._speed
         cmd.angular.z = angular_z
         self._cmd_pub.publish(cmd)
 
         self.get_logger().debug(
-            f"alpha={math.degrees(alpha):.1f}° delta={math.degrees(delta):.1f}° "
-            f"angular_z={angular_z:.2f}"
+            f"α={math.degrees(alpha):.1f}° δ={math.degrees(delta):.1f}° "
+            f"ω={angular_z:.2f}"
         )
 
 

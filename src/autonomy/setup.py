@@ -30,6 +30,7 @@ setup(
             "path_recorder_node = autonomy.path_recorder_node:main",
             "pure_pursuit_node = autonomy.pure_pursuit_node:main",
             "slam_coordinator_node = autonomy.slam_coordinator_node:main",
+            "path_planner_node = autonomy.path_planner_node:main",
         ],
     },
 )

@@ -257,11 +257,17 @@ class WallFollowerNode(Node):
             good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
             return float(np.min(good)) if len(good) else float(msg.range_max)
 
+        def cone_pct(idx, pct):
+            """Percentile of valid rays — more robust than min against single-ray reflections."""
+            v = ranges[idx]
+            good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
+            return float(np.percentile(good, pct)) if len(good) else float(msg.range_max)
+
         now_s = self.get_clock().now().nanoseconds * 1e-9
 
         left_dist   = cone_mean(self._left_idx)
         front_dist  = cone_min(self._front_idx)   # wide — used for slowing only
-        center_dist = cone_min(self._center_idx)  # narrow — used for stop/avoid
+        center_dist = cone_pct(self._center_idx, 30)  # 30th pct — robust against reflected rays
         D_ahead, alpha = self._right_wall_state(msg)
 
         # --- Crash avoidance: steer away from angled approaching wall ---

@@ -25,6 +25,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import String
 import tf2_ros
 
 
@@ -50,15 +51,24 @@ class PurePursuitNode(Node):
 
         self._load_path()
 
+        self._active = False  # wait for racing mode
+
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
 
         self.create_timer(0.05, self._control_loop)  # 20 Hz
         self.get_logger().info(
             f"Pure pursuit started — {len(self._path)} waypoints, "
             f"L_d={self._L_d} m, speed={self._speed} m/s"
         )
+
+    def _mode_cb(self, msg: String):
+        if msg.data == "racing" and not self._active:
+            self._active = True
+            self._load_path()
+            self.get_logger().info("Mode → RACING: pure pursuit activated")
 
     def _load_path(self):
         try:
@@ -70,7 +80,7 @@ class PurePursuitNode(Node):
             self.get_logger().error(f"Failed to load path: {e}")
 
     def _control_loop(self):
-        if self._done or not self._path:
+        if not self._active or self._done or not self._path:
             return
 
         try:

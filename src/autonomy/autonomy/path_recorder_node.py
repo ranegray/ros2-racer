@@ -14,6 +14,7 @@ import os
 import yaml
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
 import tf2_ros
 
 
@@ -38,6 +39,8 @@ class PathRecorderNode(Node):
         self._last_x = None
         self._last_y = None
 
+        self._saved = False
+        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
         self.create_timer(1.0 / RECORD_HZ, self._record_tick)
         self.get_logger().info(
             f"Path recorder started — will save to {self._output_path}"
@@ -73,6 +76,10 @@ class PathRecorderNode(Node):
         if len(self._poses) % 50 == 0:
             self.get_logger().info(f"Recorded {len(self._poses)} poses so far")
 
+    def _mode_cb(self, msg: String):
+        if msg.data == "racing" and not self._saved:
+            self._save()
+
     def _save(self):
         if not self._poses:
             self.get_logger().warn("No poses recorded — nothing to save")
@@ -80,6 +87,7 @@ class PathRecorderNode(Node):
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
         with open(self._output_path, "w") as f:
             yaml.dump({"poses": self._poses}, f)
+        self._saved = True
         self.get_logger().info(
             f"Saved {len(self._poses)} poses to {self._output_path}"
         )

@@ -6,9 +6,10 @@ Simple one-way mode state machine.
 
   Publish "racing" to /slam_coordinator/switch_mode to trigger the switch.
 
-The coordinator itself doesn't start/kill nodes (that's the operator's job via
-separate launch files).  It just tracks the mode and logs it clearly so the
-team can confirm the switch happened.
+On switch to "racing":
+  1. Calls slam_toolbox/save_map to freeze the map to /home/pi/map/track.
+  2. Publishes "racing" on /slam_coordinator/mode so wall_follower stops
+     and pure_pursuit takes over.
 
 Modes:
   mapping  — Lap 1: wall follower building the map
@@ -21,6 +22,10 @@ Usage (to trigger switch from CLI):
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from slam_toolbox.srv import SaveMap
+
+
+MAP_SAVE_PATH = '/home/pi/map/track'
 
 
 class SlamCoordinatorNode(Node):
@@ -35,6 +40,8 @@ class SlamCoordinatorNode(Node):
         )
         # Publish current mode at 1 Hz so other nodes can check
         self.create_timer(1.0, self._publish_mode)
+
+        self._save_map_client = self.create_client(SaveMap, '/slam_toolbox/save_map')
 
         self.get_logger().info("SLAM coordinator started — mode: MAPPING")
 
@@ -52,11 +59,33 @@ class SlamCoordinatorNode(Node):
             self.get_logger().warn("Cannot switch back from RACING to MAPPING")
             return
 
+        if requested == "racing":
+            self._save_map()
+
         self._mode = requested
-        self.get_logger().info(
-            f"*** MODE SWITCH: {self._mode.upper()} ***"
-        )
+        self.get_logger().info(f"*** MODE SWITCH: {self._mode.upper()} ***")
         self._publish_mode()
+
+    def _save_map(self):
+        if not self._save_map_client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error("slam_toolbox/save_map service not available — map NOT saved")
+            return
+
+        req = SaveMap.Request()
+        req.name.data = MAP_SAVE_PATH
+        future = self._save_map_client.call_async(req)
+        future.add_done_callback(self._save_map_done)
+        self.get_logger().info(f"Saving map to {MAP_SAVE_PATH}...")
+
+    def _save_map_done(self, future):
+        try:
+            result = future.result()
+            if result.result:
+                self.get_logger().info(f"Map saved to {MAP_SAVE_PATH}")
+            else:
+                self.get_logger().error("Map save returned failure")
+        except Exception as e:
+            self.get_logger().error(f"Map save failed: {e}")
 
     def _publish_mode(self):
         msg = String()

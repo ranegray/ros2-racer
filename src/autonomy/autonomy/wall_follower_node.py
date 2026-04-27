@@ -34,6 +34,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist, Vector3
+from std_msgs.msg import String
 
 
 # --- Tunable constants -------------------------------------------
@@ -175,6 +176,8 @@ class WallFollowerNode(Node):
             depth=1,
         )
         self.create_subscription(LaserScan, "/scan", self._scan_cb, _scan_qos)
+        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
+        self._active = True  # False when racing mode takes over
 
         _sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -263,7 +266,15 @@ class WallFollowerNode(Node):
     # Main scan callback
     # ------------------------------------------------------------------
 
+    def _mode_cb(self, msg: String):
+        if msg.data == "racing" and self._active:
+            self._active = False
+            self._cmd_pub.publish(Twist())  # zero cmd_vel before handing off
+            self.get_logger().info("Mode → RACING: wall follower stopping")
+
     def _scan_cb(self, msg: LaserScan):
+        if not self._active:
+            return
         self._last_scan_time = self.get_clock().now().nanoseconds * 1e-9
 
         # Build cone caches once

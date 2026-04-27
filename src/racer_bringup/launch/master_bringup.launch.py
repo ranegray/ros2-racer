@@ -25,7 +25,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo
 from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -185,7 +185,40 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. slam_toolbox (online async mapping) ───────────────────────────────
+    # ── 7. Path Recorder (Lap 1) ─────────────────────────────────────────────
+    path_recorder_node = Node(
+        package='autonomy',
+        executable='path_recorder_node',
+        name='path_recorder_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 8. Pure Pursuit (Lap 2) ──────────────────────────────────────────────
+    pure_pursuit_node = Node(
+        package='autonomy',
+        executable='pure_pursuit_node',
+        name='pure_pursuit_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 9. SLAM Coordinator (mode switch) ────────────────────────────────────
+    slam_coordinator_node = Node(
+        package='autonomy',
+        executable='slam_coordinator_node',
+        name='slam_coordinator_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # Ensure map save directory exists before slam_toolbox tries to write to it
+    mkdir_map = ExecuteProcess(
+        cmd=['mkdir', '-p', '/home/pi/map'],
+        output='log',
+    )
+
+    # ── 10. slam_toolbox (online async mapping) ───────────────────────────────
     slam_toolbox_node = Node(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
@@ -230,7 +263,11 @@ def generate_launch_description():
         static_tf_base_to_laser,
         rf2o_node,
         rover_node,
+        mkdir_map,
         wall_follower_node,
+        path_recorder_node,
+        pure_pursuit_node,
+        slam_coordinator_node,
         slam_toolbox_node,
         telemetry_node,
         rosbridge_launch,

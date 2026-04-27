@@ -158,6 +158,7 @@ def generate_launch_description():
             'init_pose_from_topic': '',  # empty = don't wait for ground truth
             'freq': 10.0,
         }],
+        ros_arguments=['--log-level', 'rf2o_laser_odometry:=FATAL'],
         output='log',
         condition=IfCondition(enable_lidar),
     )

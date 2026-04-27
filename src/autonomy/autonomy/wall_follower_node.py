@@ -101,7 +101,7 @@ ALPHA_TURN_KP         =  1.5  # gain on (alpha - threshold) → extra right stee
 # PD + feedback gains
 KP            = 0.8
 KD            = 0.15
-K_ALPHA       = 3.5   # wall-angle (alpha) feedback gain
+K_ALPHA       = 2.0   # wall-angle (alpha) feedback gain
 K_YAW         = 0.15  # IMU yaw-rate damping gain
 D_ERR_ALPHA   = 0.5   # exponential smoothing on derivative (1=raw, 0=frozen)
 MAX_ERROR     = 0.4   # clip distance error before PD

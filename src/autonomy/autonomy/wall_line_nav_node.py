@@ -56,7 +56,7 @@ class WallLineNavNode(Node):
         self.declare_parameter("forward_speed", 0.22)
         self.declare_parameter("turn_linear_speed", 0.27)
         self.declare_parameter("right_turn_steering", 2.0)
-        self.declare_parameter("right_turn_duration", 2.0)
+        self.declare_parameter("right_turn_duration", 4.0)
         # Two-ray F1TENTH-style estimator borrowed from claude/wall-following.
         # The perpendicular beam vanishing or the projected wall distance
         # exceeding `right_open_distance` IS the right-corner signal.

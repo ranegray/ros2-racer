@@ -106,6 +106,9 @@ K_YAW         = 0.15  # IMU yaw-rate damping gain
 D_ERR_ALPHA   = 0.5   # exponential smoothing on derivative (1=raw, 0=frozen)
 MAX_ERROR     = 0.4   # clip distance error before PD
 
+# Watchdog
+SCAN_TIMEOUT_S      =   1.0  # s — stop rover if no scan received for this long
+
 # Output
 # SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
 # (positive angular.z = RIGHT on this rover, opposite REP-103)
@@ -157,15 +160,25 @@ class WallFollowerNode(Node):
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
-        self.create_subscription(
-            LaserScan, "/scan", self._scan_cb, qos_profile_sensor_data
+        # depth=1: always process the freshest scan; drop queued stale scans
+        # so a CPU stall doesn't cause a burst of old decisions on resume.
+        _scan_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=1,
         )
+        self.create_subscription(LaserScan, "/scan", self._scan_cb, _scan_qos)
+
         _sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             depth=10,
         )
         self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _sensor_qos)
+
+        # Watchdog: if no scan arrives for SCAN_TIMEOUT_S, stop the rover
+        self._last_scan_time: float = 0.0
+        self._watchdog = self.create_timer(0.5, self._watchdog_cb)
 
         self.get_logger().info("Hybrid F1TENTH+dual-wall follower started")
 
@@ -180,6 +193,16 @@ class WallFollowerNode(Node):
 
     def _gyro_cb(self, msg: Vector3):
         self._yaw_rate = msg.z
+
+    def _watchdog_cb(self):
+        """Stop the rover if no scan has arrived recently."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._last_scan_time > 0 and (now - self._last_scan_time) > SCAN_TIMEOUT_S:
+            cmd = Twist()  # zero twist = stop
+            self._cmd_pub.publish(cmd)
+            self.get_logger().warn(
+                f"No scan for {now - self._last_scan_time:.1f}s — stopping rover"
+            )
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -234,6 +257,7 @@ class WallFollowerNode(Node):
     # ------------------------------------------------------------------
 
     def _scan_cb(self, msg: LaserScan):
+        self._last_scan_time = self.get_clock().now().nanoseconds * 1e-9
 
         # Build cone caches once
         if not self._idx_cached:

@@ -25,11 +25,12 @@ Then kill this launch and run slam_racing_launch.py.
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.launch_description_sources import AnyLaunchDescriptionSource
+from launch.actions import IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-from launch import LaunchDescription
 
 
 def generate_launch_description():
@@ -162,6 +163,16 @@ def generate_launch_description():
                         "imu_frequency": 20.0,
                     }
                 ],
+            ),
+            # rosbridge WebSocket — lets the React dashboard subscribe to /map, /scan, etc.
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(
+                    os.path.join(
+                        get_package_share_directory('rosbridge_server'),
+                        'launch',
+                        'rosbridge_websocket_launch.xml',
+                    )
+                )
             ),
         ]
     )

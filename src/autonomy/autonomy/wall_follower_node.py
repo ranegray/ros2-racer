@@ -85,6 +85,10 @@ FRONT_AVOID_D_ALPHA =   0.5  # low-pass on D term (0=frozen, 1=raw)
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
 FRONT_AVOID_ABS_GAP_THRESH = 3.5   # m — diagonal > this absolute → window/glass door
+# Close-approach escape: when very near a wall, ignore gap filter and allow subtle left steer.
+# At these distances the open-corridor diagonal reading is real geometry, not a window glitch.
+AVOID_CRASH_CLOSE_DIST     = 0.8   # m — below this, gap skip disabled + left escape enabled
+AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, half of full lock)
 
 # Right-turn junction detection
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
@@ -313,7 +317,7 @@ class WallFollowerNode(Node):
                 max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
                 rel_gap = front_L > max_diag or front_R > max_diag
                 abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH or front_L > FRONT_AVOID_ABS_GAP_THRESH
-                if rel_gap or abs_gap:
+                if (rel_gap or abs_gap) and center_dist > AVOID_CRASH_CLOSE_DIST:
                     reason = "abs" if abs_gap else "rel"
                     self.get_logger().info(
                         f"AVOID SKIP ({reason}) ctr={center_dist:.2f}m  "
@@ -334,8 +338,13 @@ class WallFollowerNode(Node):
                         self._prev_d_asymmetry = d_asym
                         avoid_steer = (FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
                                        + FRONT_AVOID_KD * d_asym)
-                        avoid_steer = max(0.0, min(MAX_STEER, avoid_steer))
-                        # Only right turns on this track — AVOID never steers left.
+                        # Normal: right-turn track, never steer left unless very close.
+                        # Close-approach escape: one diagonal may read far (genuine open corridor,
+                        # not a glitch) — allow subtle left steer to bounce off the inner wall.
+                        if center_dist < AVOID_CRASH_CLOSE_DIST:
+                            avoid_steer = max(-AVOID_CRASH_LEFT_MAX, min(MAX_STEER, avoid_steer))
+                        else:
+                            avoid_steer = max(0.0, min(MAX_STEER, avoid_steer))
                         cmd = Twist()
                         cmd.linear.x  = speed
                         cmd.angular.z = avoid_steer

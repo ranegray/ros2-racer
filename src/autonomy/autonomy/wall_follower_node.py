@@ -498,7 +498,7 @@ class WallFollowerNode(Node):
                     steer = KP * (WALL_SAFE_DIST - left_dist)
                     steer = min(steer, MAX_STEER)
                 cmd = Twist()
-                cmd.linear.x  = TURN_SPEED
+                cmd.linear.x  = BASE_SPEED
                 cmd.angular.z = steer
                 self._publish(cmd)
                 self.get_logger().info(
@@ -546,9 +546,6 @@ class WallFollowerNode(Node):
         near_dist = min(d for d in (center_dist, front_dist) if math.isfinite(d)) if (math.isfinite(center_dist) or math.isfinite(front_dist)) else float('inf')
         if near_dist < FRONT_SLOW_THRESH:
             speed = max(TURN_SPEED, speed * near_dist / FRONT_SLOW_THRESH)
-        # In sticky recovery (right wall recently lost) we're near a junction — cap speed
-        if self._right_lost_since is not None:
-            speed = min(speed, TURN_SPEED)
 
         cmd = Twist()
         cmd.linear.x  = speed

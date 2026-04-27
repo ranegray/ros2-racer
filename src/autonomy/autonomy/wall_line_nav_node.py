@@ -53,8 +53,11 @@ class WallLineNavNode(Node):
         self._last_valid_time = None
         self._last_debug_log = None
 
-        # Throttle for the "turn active" status log (Hz-rate spam guard).
-        self._last_turn_log = None
+        # Mode-output tracking: name of the active control mode and the
+        # last time we logged it. _log_mode emits an immediate transition
+        # line on change and a throttled status line otherwise.
+        self._mode_str = None
+        self._last_mode_log = None
 
         # Wall-follow fallback PD state. Reset whenever the line is
         # reacquired so the derivative term doesn't spike on next loss.
@@ -258,17 +261,18 @@ class WallLineNavNode(Node):
         now = self.get_clock().now()
         cmd = Twist()
 
+        now_s = now.nanoseconds * 1e-9
+
         if self.mode == "turn_right":
             if self.turn_until is not None and now < self.turn_until:
-                now_s = now.nanoseconds * 1e-9
-                if self._last_turn_log is None or (now_s - self._last_turn_log) >= 0.5:
-                    self._last_turn_log = now_s
-                    remaining = (self.turn_until - now).nanoseconds * 1e-9
-                    self.get_logger().info(
-                        f"[turn] active: {remaining:.2f}s remaining "
-                        f"v={self.turn_linear_speed:.2f} "
-                        f"steer={self.right_turn_steering:.2f}"
-                    )
+                remaining = (self.turn_until - now).nanoseconds * 1e-9
+                self._log_mode(
+                    now_s,
+                    "turn",
+                    f"right turn: {remaining:.2f}s remaining "
+                    f"v={self.turn_linear_speed:.2f} "
+                    f"steer={self.right_turn_steering:.2f}",
+                )
                 cmd.linear.x = self.turn_linear_speed
                 cmd.angular.z = self.right_turn_steering
                 self.cmd_pub.publish(cmd)
@@ -278,7 +282,6 @@ class WallLineNavNode(Node):
             self.turn_until = None
             self.cooldown_until = now + Duration(seconds=RIGHT_TURN_COOLDOWN_S)
             self.right_open_scan_run = 0
-            self._last_turn_log = None
             self.get_logger().info(
                 f"[turn] complete: handing back to line PD; "
                 f"cooldown {RIGHT_TURN_COOLDOWN_S:.1f}s"
@@ -289,12 +292,18 @@ class WallLineNavNode(Node):
         ) and self.right_open_scan_run >= self.right_open_required_scans:
             self.mode = "turn_right"
             self.turn_until = now + Duration(seconds=self.right_turn_duration)
-            self._last_turn_log = None
             self.get_logger().info(
                 "[turn] commit: right wall absent — scripted right turn "
                 f"v={self.turn_linear_speed:.2f} "
                 f"steer={self.right_turn_steering:.2f} "
                 f"duration={self.right_turn_duration:.2f}s"
+            )
+            self._log_mode(
+                now_s,
+                "turn",
+                f"right turn: starting "
+                f"v={self.turn_linear_speed:.2f} "
+                f"steer={self.right_turn_steering:.2f}",
             )
             cmd.linear.x = self.turn_linear_speed
             cmd.angular.z = self.right_turn_steering
@@ -311,6 +320,8 @@ class WallLineNavNode(Node):
             if self.line_visible
             else None
         )
+        now_s = now.nanoseconds * 1e-9
+
         if follow is None:
             # Line missing — try the wall-follow fallback first. Only fall
             # through to the coast-straight path if the lidar estimator
@@ -325,6 +336,12 @@ class WallLineNavNode(Node):
             self.line_last_steer = self._slew_line_steer(0.0)
             cmd.angular.z = float(self.line_last_steer)
             self.cmd_pub.publish(cmd)
+            self._log_mode(
+                now_s,
+                "coast",
+                f"line lost & no fresh wall data — "
+                f"v={self.line_missing_speed:.2f} steer={self.line_last_steer:+.2f}",
+            )
             return
 
         # Line reacquired — reset wall PD so its derivative term doesn't
@@ -354,6 +371,12 @@ class WallLineNavNode(Node):
         self.line_last_steer = self._slew_line_steer(target_steer)
         cmd.angular.z = float(self.line_last_steer)
         self.cmd_pub.publish(cmd)
+        self._log_mode(
+            now_s,
+            "line",
+            f"offset={self.line_smoothed_offset:+.2f} "
+            f"steer={self.line_last_steer:+.2f} v={self.forward_speed:.2f}",
+        )
 
     def _slew_line_steer(self, target):
         delta = max(
@@ -415,12 +438,32 @@ class WallLineNavNode(Node):
         cmd.linear.x = float(self.line_missing_speed)
         cmd.angular.z = float(steering)
         self.cmd_pub.publish(cmd)
+        self._log_mode(
+            now_s,
+            "wall",
+            f"D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}° "
+            f"err={error:+.2f} steer={steering:+.2f} "
+            f"v={self.line_missing_speed:.2f}",
+        )
         return True
 
     def _reset_wall_follow_state(self):
         self._wall_prev_error = 0.0
         self._wall_prev_d_error = 0.0
         self._wall_prev_time = None
+
+    def _log_mode(self, now_s, name, detail):
+        """Emit an immediate transition line on mode change, then a 2 Hz
+        throttled status line while the mode persists."""
+        if name != self._mode_str:
+            prev = self._mode_str or "init"
+            self.get_logger().info(f"[mode] {prev} → {name}: {detail}")
+            self._mode_str = name
+            self._last_mode_log = now_s
+            return
+        if self._last_mode_log is None or (now_s - self._last_mode_log) >= 0.5:
+            self._last_mode_log = now_s
+            self.get_logger().info(f"[{name}] {detail}")
 
     def _extract_line_point(self, msg: PointStamped | None, now):
         if msg is None:

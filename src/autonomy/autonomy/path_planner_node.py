@@ -198,28 +198,90 @@ class PathPlannerNode(Node):
         try:
             with open(self._path_file) as f:
                 data = yaml.safe_load(f)
-            recorded = [(p["x"], p["y"]) for p in data["poses"]]
+            poses = data["poses"]
         except Exception as e:
             self.get_logger().error(f"Failed to load recorded path: {e}")
             return None
 
-        if len(recorded) < self._num_via + 1:
+        if len(poses) < self._num_via + 1:
             self.get_logger().warn(
-                f"Recorded path only has {len(recorded)} poses — "
-                f"using all as via-points"
+                f"Recorded path only has {len(poses)} poses — using all"
             )
-            return recorded
+            return [(p["x"], p["y"]) for p in poses]
 
-        # Sample num_via points evenly distributed across the lap,
-        # skipping the very first and last (those are near the start).
-        step  = len(recorded) / (self._num_via + 1)
-        idxs  = [int(round((i + 1) * step)) for i in range(self._num_via)]
-        idxs  = [min(i, len(recorded) - 1) for i in idxs]
-        via   = [recorded[i] for i in idxs]
+        # ------------------------------------------------------------------
+        # Filter to "balanced" (straight) portions only.
+        #
+        # Compute curvature = |dθ/ds| at each pose:
+        #   θ   from stored qz/qw (yaw = 2*atan2(qz, qw))
+        #   ds  from Euclidean distance to next pose
+        #
+        # A sliding window (±WINDOW poses) smooths noise. Poses whose
+        # smoothed curvature exceeds CURVATURE_THRESH rad/m are corners and
+        # are excluded from via-point candidacy.
+        # ------------------------------------------------------------------
+        CURVATURE_THRESH = 0.35   # rad/m — below this = straight/balanced
+        WINDOW           = 5      # half-width of smoothing window
+
+        n = len(poses)
+        yaws = [2.0 * math.atan2(p.get("qz", 0.0), p.get("qw", 1.0))
+                for p in poses]
+
+        # Arc-length between consecutive poses
+        dists = [
+            math.hypot(poses[i+1]["x"] - poses[i]["x"],
+                       poses[i+1]["y"] - poses[i]["y"])
+            for i in range(n - 1)
+        ]
+
+        # Instantaneous |dθ/ds| (guard against zero ds)
+        def wrap(a):
+            return math.atan2(math.sin(a), math.cos(a))
+
+        raw_curv = [
+            abs(wrap(yaws[i+1] - yaws[i])) / max(dists[i], 0.01)
+            for i in range(n - 1)
+        ]
+        raw_curv.append(raw_curv[-1])  # pad to length n
+
+        # Smooth curvature with a sliding window max (conservative: a pose is
+        # "in a corner" if any nearby pose has high curvature)
+        smoothed = []
+        for i in range(n):
+            lo = max(0, i - WINDOW)
+            hi = min(n, i + WINDOW + 1)
+            smoothed.append(max(raw_curv[lo:hi]))
+
+        straight_idxs = [
+            i for i, c in enumerate(smoothed)
+            if c < CURVATURE_THRESH
+            and i > 0               # skip very start
+            and i < n - 1           # skip very end
+        ]
 
         self.get_logger().info(
-            f"Sampled {len(via)} via-points from {len(recorded)}-pose recorded path "
-            f"(indices: {idxs})"
+            f"Recorded path: {n} poses, {len(straight_idxs)} in straight sections "
+            f"(curvature < {CURVATURE_THRESH:.2f} rad/m)"
+        )
+
+        if len(straight_idxs) < self._num_via:
+            self.get_logger().warn(
+                "Not enough straight poses for requested via-points — "
+                "lowering threshold and using all straight poses"
+            )
+            return [(poses[i]["x"], poses[i]["y"]) for i in straight_idxs]
+
+        # Sample num_via evenly from the straight candidates (by position in
+        # the list, not by index, so spacing is even around the course)
+        step = len(straight_idxs) / (self._num_via + 1)
+        sel  = [straight_idxs[int(round((k + 1) * step))]
+                for k in range(self._num_via)]
+        sel  = [min(i, n - 1) for i in sel]
+        via  = [(poses[i]["x"], poses[i]["y"]) for i in sel]
+
+        self.get_logger().info(
+            f"Sampled {len(via)} via-points from straight sections "
+            f"(pose indices: {sel})"
         )
         return via
 

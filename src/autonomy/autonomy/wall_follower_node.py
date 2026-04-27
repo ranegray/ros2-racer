@@ -87,7 +87,7 @@ FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative ga
 FRONT_AVOID_ABS_GAP_THRESH = 3.5   # m — diagonal > this absolute → window/glass door
 # Close-approach escape: when very near a wall, ignore gap filter and allow subtle left steer.
 # At these distances the open-corridor diagonal reading is real geometry, not a window glitch.
-AVOID_CRASH_CLOSE_DIST     = 0.8   # m — below this, gap skip disabled + left escape enabled
+AVOID_CRASH_CLOSE_DIST     = 1.5   # m — below this, gap skip disabled + left escape enabled
 AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, half of full lock)
 
 # Right-turn junction detection

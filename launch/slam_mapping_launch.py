@@ -131,6 +131,7 @@ def generate_launch_description():
                 name="wall_follower_node",
                 output="screen",
                 parameters=[{"speed_override": 0.3}],
+            remappings=[('/scan', '/scan_filtered')],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(

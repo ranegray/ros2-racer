@@ -51,7 +51,7 @@ MAX_ALPHA_JUMP_DEG  =  30.0  # degrees — max alpha change per scan (windows/ga
 SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 
 # Sticky recovery: require N consecutive valid scans to exit lost mode
-LOST_RECOVERY_SCANS =     3
+LOST_RECOVERY_SCANS =     5
 
 # Corner handling (both walls gone)
 COAST_S             =   0.4  # s — coast straight before committing

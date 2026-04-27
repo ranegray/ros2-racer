@@ -55,7 +55,7 @@ SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 LOST_RECOVERY_SCANS =     3
 
 # Corner handling (both walls gone)
-COAST_S             =   0.2  # s — coast straight before committing
+COAST_S             =   0.3  # s — coast straight before committing
 COMMIT_TURN_S       =   2.0  # s — duration of full-lock right turn
 
 # Left wall

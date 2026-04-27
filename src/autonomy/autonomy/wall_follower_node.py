@@ -94,8 +94,7 @@ AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, hal
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
 # When RAY_A reads close → doorway recess → go straight as normal.
 RIGHT_OPEN_THRESH       = 1.5  # m — RAY_A beyond this = right hallway confirmed
-# RAY_A > MAX_PLAUSIBLE means it went through a window/gap, not a real hallway
-# (real hallway opposite wall is ~1.5-3m away; windows read 8m+)
+RIGHT_HALLWAY_MAX_RAY   = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
 RIGHT_OPEN_CONFIRM_SCANS =   3  # consecutive "right gone + open" scans before committing to turn
 #                                  small windows trigger for 1-2 scans; real junctions are sustained
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
@@ -310,7 +309,9 @@ class WallFollowerNode(Node):
             self._avoid_confirm += 1
         else:
             self._avoid_confirm = 0
-        if self._avoid_confirm >= AVOID_CONFIRM_SCANS and center_dist < FRONT_AVOID_THRESH:
+        if (self._avoid_confirm >= AVOID_CONFIRM_SCANS
+                and center_dist < FRONT_AVOID_THRESH
+                and (self._both_lost_since is None or center_dist < AVOID_CRASH_CLOSE_DIST)):
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
@@ -455,7 +456,7 @@ class WallFollowerNode(Node):
         if right_gone:
             ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
             # NaN/inf = no return at 45° = open space = hallway (same as far read)
-            open_hallway = (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < MAX_PLAUSIBLE)
+            open_hallway = (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY)
             if open_hallway:
                 self._right_open_count += 1
             else:

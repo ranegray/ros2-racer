@@ -47,7 +47,7 @@ MAX_PLAUSIBLE       =   3.5  # m — beyond this = right wall gone
 
 # Spike detector (doorways cause brief spikes; corners cause sustained loss)
 MAX_D_JUMP          =   0.8  # m — max D_ahead change per scan
-MAX_ALPHA_JUMP_DEG  =  60.0  # degrees — max alpha change per scan
+MAX_ALPHA_JUMP_DEG  =  30.0  # degrees — max alpha change per scan (windows/gaps cause bigger jumps)
 SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 
 # Sticky recovery: require N consecutive valid scans to exit lost mode
@@ -96,7 +96,7 @@ RIGHT_OPEN_CONFIRM_SCANS =   3  # consecutive "right gone + open" scans before c
 #                                  small windows trigger for 1-2 scans; real junctions are sustained
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.
-ALPHA_TURN_THRESH_DEG = 25.0  # degrees — alpha above this triggers the boost
+ALPHA_TURN_THRESH_DEG = 40.0  # degrees — alpha above this triggers the boost (raised: 33° window alpha must not trigger)
 ALPHA_TURN_KP         =  1.5  # gain on (alpha - threshold) → extra right steer
 
 # PD + feedback gains

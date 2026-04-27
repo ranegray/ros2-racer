@@ -158,7 +158,7 @@ def generate_launch_description():
             'init_pose_from_topic': '',  # empty = don't wait for ground truth
             'freq': 10.0,
         }],
-        output='screen',
+        output='log',
         condition=IfCondition(enable_lidar),
     )
 

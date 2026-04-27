@@ -134,9 +134,10 @@ class WallFollowerNode(Node):
         self.declare_parameter("speed_override", -1.0)
         _override = self.get_parameter("speed_override").value
         if _override > 0.0:
-            global BASE_SPEED
+            global BASE_SPEED, TURN_SPEED
             BASE_SPEED = _override
-            self.get_logger().info(f"speed_override active: BASE_SPEED={BASE_SPEED} m/s")
+            TURN_SPEED = min(TURN_SPEED, _override)
+            self.get_logger().info(f"speed_override active: BASE_SPEED={BASE_SPEED} m/s  TURN_SPEED={TURN_SPEED} m/s")
 
         # PD state
         self._prev_error   = 0.0

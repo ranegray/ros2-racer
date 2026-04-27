@@ -3,6 +3,7 @@ wall_line_nav_node.py
 Inputs:
   /scan                       sensor_msgs/LaserScan
   /line_follow_point          geometry_msgs/PointStamped (from line_detector)
+  /imu/gyro                   geometry_msgs/Vector3 (yaw-rate damping for wall-follow)
 
 Output:
   /cmd_vel                    geometry_msgs/Twist
@@ -13,10 +14,15 @@ import math
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PointStamped, Twist
+from geometry_msgs.msg import PointStamped, Twist, Vector3
 
 RIGHT_TURN_COOLDOWN_S = 10.0
 
@@ -49,6 +55,13 @@ class WallLineNavNode(Node):
 
         # Throttle for the "turn active" status log (Hz-rate spam guard).
         self._last_turn_log = None
+
+        # Wall-follow fallback PD state. Reset whenever the line is
+        # reacquired so the derivative term doesn't spike on next loss.
+        self._wall_prev_error = 0.0
+        self._wall_prev_d_error = 0.0
+        self._wall_prev_time = None
+        self._yaw_rate = 0.0
 
         self.control_timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
@@ -90,6 +103,23 @@ class WallLineNavNode(Node):
         self.declare_parameter("line_offset_alpha", 0.25)
         self.declare_parameter("line_offset_deadband", 0.0)
         self.declare_parameter("line_max_steer_step", 0.2)
+        # Wall-follow fallback (used when the line is missing). PD on the
+        # same two-ray right-wall estimator that drives the right-turn
+        # detector, ported from claude/wall-following-pd-controller-eeppz.
+        # `wall_steering_sign=-1` matches this rover's inverted servo so
+        # error>0 (too close) commands a left turn.
+        self.declare_parameter("wall_kp", 0.8)
+        self.declare_parameter("wall_kd", 0.15)
+        self.declare_parameter("wall_k_alpha", 3.5)
+        self.declare_parameter("wall_k_yaw", 0.15)
+        self.declare_parameter("wall_target_distance", 0.6)
+        self.declare_parameter("wall_max_error", 1.5)
+        self.declare_parameter("wall_max_steering", 2.0)
+        self.declare_parameter("wall_d_error_alpha", 0.5)
+        self.declare_parameter("wall_steering_sign", -1.0)
+        # Don't fall back to wall-follow on a stale (D, α) — coast straight
+        # instead until either rf2o resumes or the line returns.
+        self.declare_parameter("wall_data_max_age_s", 0.7)
 
         self.forward_speed = self.get_parameter("forward_speed").value
         self.turn_linear_speed = self.get_parameter("turn_linear_speed").value
@@ -123,6 +153,16 @@ class WallLineNavNode(Node):
         self.line_offset_alpha = self.get_parameter("line_offset_alpha").value
         self.line_offset_deadband = self.get_parameter("line_offset_deadband").value
         self.line_max_steer_step = self.get_parameter("line_max_steer_step").value
+        self.wall_kp = self.get_parameter("wall_kp").value
+        self.wall_kd = self.get_parameter("wall_kd").value
+        self.wall_k_alpha = self.get_parameter("wall_k_alpha").value
+        self.wall_k_yaw = self.get_parameter("wall_k_yaw").value
+        self.wall_target_distance = self.get_parameter("wall_target_distance").value
+        self.wall_max_error = self.get_parameter("wall_max_error").value
+        self.wall_max_steering = self.get_parameter("wall_max_steering").value
+        self.wall_d_error_alpha = self.get_parameter("wall_d_error_alpha").value
+        self.wall_steering_sign = self.get_parameter("wall_steering_sign").value
+        self.wall_data_max_age_s = self.get_parameter("wall_data_max_age_s").value
 
     def _setup_subscriptions(self):
         self.scan_sub = self.create_subscription(
@@ -131,6 +171,18 @@ class WallLineNavNode(Node):
         self.follow_point_sub = self.create_subscription(
             PointStamped, "/line_follow_point", self.follow_point_callback, 10
         )
+        # rover_node publishes /imu/gyro BEST_EFFORT/VOLATILE.
+        gyro_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+        self.gyro_sub = self.create_subscription(
+            Vector3, "/imu/gyro", self.gyro_callback, gyro_qos
+        )
+
+    def gyro_callback(self, msg: Vector3):
+        self._yaw_rate = msg.z
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
@@ -260,13 +312,24 @@ class WallLineNavNode(Node):
             else None
         )
         if follow is None:
+            # Line missing — try the wall-follow fallback first. Only fall
+            # through to the coast-straight path if the lidar estimator
+            # also has no fresh data.
+            if self._publish_wall_follow(now):
+                # Reset line PD state so re-acquire doesn't D-spike.
+                self.line_prev_offset = self.line_smoothed_offset
+                self.line_last_steer = 0.0
+                return
             cmd.linear.x = float(self.line_missing_speed)
-            # Reset prev_offset so re-acquire doesn't cause a D spike.
             self.line_prev_offset = self.line_smoothed_offset
             self.line_last_steer = self._slew_line_steer(0.0)
             cmd.angular.z = float(self.line_last_steer)
             self.cmd_pub.publish(cmd)
             return
+
+        # Line reacquired — reset wall PD so its derivative term doesn't
+        # spike on the next loss.
+        self._reset_wall_follow_state()
 
         offset = (follow[0] - self.line_target_x) / self.line_image_center_x
         self.line_smoothed_offset = (
@@ -298,6 +361,66 @@ class WallLineNavNode(Node):
             min(self.line_max_steer_step, target - self.line_last_steer),
         )
         return self.line_last_steer + delta
+
+    def _publish_wall_follow(self, now) -> bool:
+        """PD right-wall fallback when the line is missing.
+
+        Reuses (D_ahead, alpha) from scan_callback's spike-rejected state.
+        Returns True if a Twist was published, False if there's no fresh
+        wall data and the caller should coast straight instead.
+        """
+        if (
+            self._last_valid_D is None
+            or self._last_valid_alpha is None
+            or self._last_valid_time is None
+        ):
+            return False
+        now_s = now.nanoseconds * 1e-9
+        if (now_s - self._last_valid_time) > self.wall_data_max_age_s:
+            return False
+
+        D_ahead = self._last_valid_D
+        alpha = self._last_valid_alpha
+
+        # Positive error => too close to right wall => want to steer LEFT.
+        # The sign flip at the end inverts to match the rover's wiring.
+        error = self.wall_target_distance - D_ahead
+        error = max(-self.wall_max_error, min(self.wall_max_error, error))
+
+        if self._wall_prev_time is None:
+            d_error = 0.0
+        else:
+            dt = now_s - self._wall_prev_time
+            raw_d = (error - self._wall_prev_error) / dt if dt > 0 else 0.0
+            d_error = (
+                self.wall_d_error_alpha * raw_d
+                + (1.0 - self.wall_d_error_alpha) * self._wall_prev_d_error
+            )
+        self._wall_prev_error = error
+        self._wall_prev_d_error = d_error
+        self._wall_prev_time = now_s
+
+        steering = (
+            self.wall_kp * error
+            + self.wall_kd * d_error
+            - self.wall_k_alpha * alpha
+            - self.wall_k_yaw * self._yaw_rate
+        )
+        steering = self.wall_steering_sign * steering
+        steering = max(
+            -self.wall_max_steering, min(self.wall_max_steering, steering)
+        )
+
+        cmd = Twist()
+        cmd.linear.x = float(self.line_missing_speed)
+        cmd.angular.z = float(steering)
+        self.cmd_pub.publish(cmd)
+        return True
+
+    def _reset_wall_follow_state(self):
+        self._wall_prev_error = 0.0
+        self._wall_prev_d_error = 0.0
+        self._wall_prev_time = None
 
     def _extract_line_point(self, msg: PointStamped | None, now):
         if msg is None:

@@ -130,10 +130,7 @@ def generate_launch_description():
                 executable="wall_follower_node",
                 name="wall_follower_node",
                 output="screen",
-                remappings=[("/scan", "/scan_filtered")],
-                parameters=[
-                    {"speed_override": 0.5}
-                ],  # prevent the wall follower from going too fast for slam mapping
+                parameters=[{"speed_override": 0.5}],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(

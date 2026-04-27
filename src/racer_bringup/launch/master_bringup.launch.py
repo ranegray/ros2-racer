@@ -185,7 +185,20 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. rosbridge WebSocket server ────────────────────────────────────────
+    # ── 7. slam_toolbox (online async mapping) ───────────────────────────────
+    slam_toolbox_node = Node(
+        package='slam_toolbox',
+        executable='async_slam_toolbox_node',
+        name='slam_toolbox',
+        parameters=[os.path.join(
+            get_package_share_directory('racer_bringup'),
+            'config', 'slam_toolbox_mapping.yaml',
+        )],
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 8. rosbridge WebSocket server ────────────────────────────────────────
     rosbridge_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -218,6 +231,7 @@ def generate_launch_description():
         rf2o_node,
         rover_node,
         wall_follower_node,
+        slam_toolbox_node,
         telemetry_node,
         rosbridge_launch,
 

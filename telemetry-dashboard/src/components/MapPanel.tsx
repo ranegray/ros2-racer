@@ -1,10 +1,11 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import type { OccupancyGrid } from '../telemetry'
+import type { OccupancyGrid, RosPath } from '../telemetry'
 
 type Props = {
   map: OccupancyGrid | null
   arrivedAt: number
   stalenessMs?: number
+  plannedPath?: RosPath | null
 }
 
 const BG = '#0b0f14'
@@ -13,7 +14,11 @@ const C_UNKNOWN = [18, 20, 30]    // dark blue-grey
 const C_FREE    = [220, 240, 220] // pale green
 const C_OCC     = [20, 20, 20]    // near-black
 
-function draw(canvas: HTMLCanvasElement, map: OccupancyGrid | null) {
+function draw(
+  canvas: HTMLCanvasElement,
+  map: OccupancyGrid | null,
+  plannedPath: RosPath | null | undefined,
+) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
 
@@ -76,28 +81,69 @@ function draw(canvas: HTMLCanvasElement, map: OccupancyGrid | null) {
   off.getContext('2d')!.putImageData(img, 0, 0)
   ctx.imageSmoothingEnabled = false
   ctx.drawImage(off, offX, offY, drawW, drawH)
+
+  // Overlay planned path
+  if (plannedPath && plannedPath.poses.length > 1) {
+    const { resolution, origin } = map.info
+    const ox = origin.position.x
+    const oy = origin.position.y
+
+    // World → canvas pixel: flip Y (ROS Y-up, canvas Y-down)
+    const toCanvasX = (wx: number) => offX + ((wx - ox) / resolution) * scale
+    const toCanvasY = (wy: number) => offY + drawH - ((wy - oy) / resolution) * scale
+
+    ctx.save()
+    ctx.strokeStyle = '#00e5ff'
+    ctx.lineWidth = 2
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    const first = plannedPath.poses[0].pose.position
+    ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
+    for (let i = 1; i < plannedPath.poses.length; i++) {
+      const p = plannedPath.poses[i].pose.position
+      ctx.lineTo(toCanvasX(p.x), toCanvasY(p.y))
+    }
+    ctx.stroke()
+
+    // Start dot (green)
+    ctx.fillStyle = '#00ff88'
+    ctx.beginPath()
+    ctx.arc(toCanvasX(first.x), toCanvasY(first.y), 4, 0, Math.PI * 2)
+    ctx.fill()
+
+    // End dot (red)
+    const last = plannedPath.poses[plannedPath.poses.length - 1].pose.position
+    ctx.fillStyle = '#ff4444'
+    ctx.beginPath()
+    ctx.arc(toCanvasX(last.x), toCanvasY(last.y), 4, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
 }
 
 export const MapPanel = memo(function MapPanel({
   map,
   arrivedAt,
   stalenessMs = 3000,
+  plannedPath,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const mapRef = useRef<OccupancyGrid | null>(map)
+  const pathRef = useRef<RosPath | null | undefined>(plannedPath)
   mapRef.current = map
+  pathRef.current = plannedPath
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    draw(canvas, map)
-  }, [map])
+    draw(canvas, map, plannedPath)
+  }, [map, plannedPath])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(() => draw(canvas, mapRef.current))
+    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current))
     ro.observe(canvas)
     return () => ro.disconnect()
   }, [])
@@ -118,6 +164,11 @@ export const MapPanel = memo(function MapPanel({
         <span className={`badge ${stale ? 'badge-stale' : 'badge-live'}`}>
           {map ? `${cells} · ${res}` : 'no map'}
         </span>
+        {plannedPath && plannedPath.poses.length > 0 && (
+          <span className="badge badge-live" style={{ marginLeft: 6, color: '#00e5ff' }}>
+            path · {plannedPath.poses.length} pts
+          </span>
+        )}
       </div>
       <div className="map-frame">
         <canvas ref={canvasRef} />

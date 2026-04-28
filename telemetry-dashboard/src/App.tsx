@@ -6,7 +6,7 @@ import { LidarPolar } from './components/LidarPolar'
 import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { CompressedImage, LaserScan, OccupancyGrid, RacerTelemetry, Sample } from './telemetry'
+import type { CompressedImage, LaserScan, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
 import { BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
@@ -55,6 +55,7 @@ function App() {
   const [scanArrivedAt, setScanArrivedAt] = useState(0)
   const [map, setMap] = useState<OccupancyGrid | null>(null)
   const [mapArrivedAt, setMapArrivedAt] = useState(0)
+  const [plannedPath, setPlannedPath] = useState<RosPath | null>(null)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const bufferRef = useRef<Sample[]>([])
@@ -172,6 +173,18 @@ function App() {
       setMapArrivedAt(Date.now())
     })
 
+    const plannedPathTopic = new ROSLIB.Topic({
+      ros,
+      name: '/planned_path',
+      messageType: 'nav_msgs/msg/Path',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 2000,
+    })
+    plannedPathTopic.subscribe((raw) => {
+      setPlannedPath(raw as unknown as RosPath)
+    })
+
     return () => {
       disposed = true
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
@@ -180,6 +193,7 @@ function App() {
       lineDebugTopic?.unsubscribe()
       scanTopic?.unsubscribe()
       mapTopic.unsubscribe()
+      plannedPathTopic.unsubscribe()
       ros.close()
     }
   }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
@@ -224,7 +238,7 @@ function App() {
         />
         <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
         <Charts samples={samples} />
-        <MapPanel map={map} arrivedAt={mapArrivedAt} />
+        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} />
       </div>
 
       <RawJson msg={latest} />

@@ -443,31 +443,22 @@ class WallFollowerNode(Node):
             self._prev_error = self._prev_d_error = 0.0
             self._prev_time  = now_s
 
-            # Check right side: real corridor reads far (3m+), room/alcove reads its back wall.
-            # Coast starts immediately regardless — only the turn is gated.
-            ray_b_now = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)
-            right_is_corridor = ray_b_now > 3.0
-
             cmd = Twist()
             cmd.linear.x = TURN_SPEED
             if lost_for < COAST_S:
                 cmd.angular.z = 0.0
                 mode = "coast"
-            elif lost_for < COAST_S + COMMIT_TURN_S and right_is_corridor:
+            elif lost_for < COAST_S + COMMIT_TURN_S:
                 cmd.angular.z = MAX_STEER
                 mode = "turn"
-            elif lost_for >= COAST_S + COMMIT_TURN_S:
+            else:
                 cmd.angular.z = 0.0
                 self._both_lost_since = None
                 mode = "release"
-            else:
-                cmd.angular.z = 0.0  # both gone but right is a room — go straight
-                mode = "alcoves"
 
             self._publish(cmd)
             self.get_logger().info(
-                f"BOTH GONE ({lost_for:.2f}s) {mode}  "
-                f"ray_b={ray_b_now:.2f}m  left={left_dist:.2f}"
+                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
             )
             return
 

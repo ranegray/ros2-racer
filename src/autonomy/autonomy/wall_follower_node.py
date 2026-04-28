@@ -23,106 +23,116 @@ Four modes:
 """
 
 import math
+
 import numpy as np
 import rclpy
+from geometry_msgs.msg import Twist, Vector3
 from rclpy.node import Node
 from rclpy.qos import (
+    DurabilityPolicy,
     QoSProfile,
     ReliabilityPolicy,
-    DurabilityPolicy,
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist, Vector3
 from std_msgs.msg import String
-
 
 # --- Tunable constants -------------------------------------------
 # Right-wall F1TENTH estimator
-RAY_A_DEG           = -45.0  # forward-right diagonal ray (degrees)
-RAY_B_DEG           = -90.0  # perpendicular-right ray (degrees)
-RAY_HALF_WIN_DEG    =   3.0  # cone half-width per ray (degrees)
-LOOK_AHEAD          =   0.5  # m — lookahead for D_ahead projection
-TARGET_DIST         =   0.8  # m — desired distance from right wall
-MAX_PLAUSIBLE       =   3.5  # m — beyond this = right wall gone
+RAY_A_DEG = -45.0  # forward-right diagonal ray (degrees)
+RAY_B_DEG = -90.0  # perpendicular-right ray (degrees)
+RAY_HALF_WIN_DEG = 3.0  # cone half-width per ray (degrees)
+LOOK_AHEAD = 0.5  # m — lookahead for D_ahead projection
+TARGET_DIST = 0.8  # m — desired distance from right wall
+MAX_PLAUSIBLE = 3.5  # m — beyond this = right wall gone
 
 # Spike detector (doorways cause brief spikes; corners cause sustained loss)
-MAX_D_JUMP          =   0.8  # m — max D_ahead change per scan
-MAX_ALPHA_JUMP_DEG  =  30.0  # degrees — max alpha change per scan (windows/gaps cause bigger jumps)
-SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
+MAX_D_JUMP = 0.8  # m — max D_ahead change per scan
+MAX_ALPHA_JUMP_DEG = (
+    30.0  # degrees — max alpha change per scan (windows/gaps cause bigger jumps)
+)
+SPIKE_STALE_S = 0.7  # s — invalidate spike history after this gap
 
 # Sticky recovery: require N consecutive valid scans to exit lost mode
-LOST_RECOVERY_SCANS =     3
+LOST_RECOVERY_SCANS = 3
 
 # Corner handling (both walls gone)
-COAST_S             =   0.1  # s — coast straight before committing
-COMMIT_TURN_S       =   2.0  # s — duration of full-lock right turn
+COAST_S = 0.1  # s — coast straight before committing
+COMMIT_TURN_S = 2.0  # s — duration of full-lock right turn
 
 # Left wall
-LEFT_CONE_DEG       =    20  # ± degrees around +90° for left-wall rays
-WALL_GONE_THRESH    =   1.8  # m — left wall absent above this
-WALL_SAFE_DIST      =   1.0  # m — nudge away if remaining wall closer than this
-BALANCE_KP          =   0.3  # left-wall balance correction gain
+LEFT_CONE_DEG = 20  # ± degrees around +90° for left-wall rays
+WALL_GONE_THRESH = 1.8  # m — left wall absent above this
+WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
+BALANCE_KP = 0.3  # left-wall balance correction gain
 
 # Front safety
-FRONT_CONE_DEG      =    40  # ± degrees around 0° — wide cone for slowing only
-CENTER_CONE_DEG     =    15  # ± degrees around 0° — narrow cone for stop/avoid (ignores side walls)
-FRONT_SLOW_THRESH   =   2.0  # m — start slowing based on nearest front reading
-FRONT_STOP_THRESH   =  0.45  # m — hard emergency turn (narrow cone only)
+FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only
+CENTER_CONE_DEG = (
+    15  # ± degrees around 0° — narrow cone for stop/avoid (ignores side walls)
+)
+FRONT_SLOW_THRESH = 2.0  # m — start slowing based on nearest front reading
+FRONT_STOP_THRESH = 0.45  # m — hard emergency turn (narrow cone only)
 
 
 # Crash avoidance — steer away from angled approaching wall
 # Uses two diagonal rays (+/-FRONT_AVOID_DEG) to detect wall angle:
 #   front_R - front_L > 0  →  wall like \  →  steer right (positive)
 #   front_R - front_L < 0  →  wall like /  →  steer left  (negative)
-FRONT_AVOID_THRESH  =   2.8  # m — start applying angle correction
-AVOID_CONFIRM_SCANS =     2  # consecutive scans below thresh before AVOID fires
-FRONT_AVOID_DEG     =  25.0  # degrees for the diagonal front rays
-FRONT_AVOID_MIN_ASYM=  0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP      =   2.2  # gain on asymmetry → steer correction
-FRONT_AVOID_KD      =   0.5  # gain on rate-of-change of asymmetry
-FRONT_AVOID_D_ALPHA =   0.5  # low-pass on D term (0=frozen, 1=raw)
+FRONT_AVOID_THRESH = 2.8  # m — start applying angle correction
+AVOID_CONFIRM_SCANS = 2  # consecutive scans below thresh before AVOID fires
+FRONT_AVOID_DEG = 25.0  # degrees for the diagonal front rays
+FRONT_AVOID_MIN_ASYM = 0.15  # m — ignore asymmetry smaller than this
+FRONT_AVOID_KP = 3.0  # gain on asymmetry → steer correction
+FRONT_AVOID_KD = 1.0  # gain on rate-of-change of asymmetry
+FRONT_AVOID_D_ALPHA = 0.5  # low-pass on D term (0=frozen, 1=raw)
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
-FRONT_AVOID_MAX_DIAG_MULT  = 3.0   # diagonal > N × center_dist → relative gap
-FRONT_AVOID_ABS_GAP_THRESH = 3.5   # m — diagonal > this absolute → window/glass door
+FRONT_AVOID_MAX_DIAG_MULT = 3.0  # diagonal > N × center_dist → relative gap
+FRONT_AVOID_ABS_GAP_THRESH = 3.5  # m — diagonal > this absolute → window/glass door
 # Close-approach escape: when very near a wall, ignore gap filter and allow subtle left steer.
 # At these distances the open-corridor diagonal reading is real geometry, not a window glitch.
-AVOID_CRASH_CLOSE_DIST     = 1.5   # m — below this, gap skip disabled + left escape enabled
-AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, half of full lock)
+AVOID_CRASH_CLOSE_DIST = 1.5  # m — below this, gap skip disabled + left escape enabled
+AVOID_CRASH_LEFT_MAX = 1.0  # max left steer in crash escape (subtle, half of full lock)
 
 # Right-turn junction detection
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
 # When RAY_A reads close → doorway recess → go straight as normal.
-RIGHT_OPEN_THRESH       = 1.5  # m — RAY_A beyond this = right hallway confirmed
-RIGHT_HALLWAY_MAX_RAY   = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
-RIGHT_OPEN_CONFIRM_SCANS =   2  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
-RIGHT_OPEN_CONFIRM_FAR   =  25  # scans when center is farther — outlasts a ~1 m doorway at 0.45 m/s
-RIGHT_OPEN_CLOSE_DIST    = 2.0  # m — below this the dead-end is close: use fast confirm
+RIGHT_OPEN_THRESH = 1.5  # m — RAY_A beyond this = right hallway confirmed
+RIGHT_HALLWAY_MAX_RAY = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
+RIGHT_OPEN_CONFIRM_SCANS = (
+    2  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
+)
+RIGHT_OPEN_CONFIRM_FAR = (
+    25  # scans when center is farther — outlasts a ~1 m doorway at 0.45 m/s
+)
+RIGHT_OPEN_CLOSE_DIST = 2.0  # m — below this the dead-end is close: use fast confirm
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.
 ALPHA_TURN_THRESH_DEG = 40.0  # degrees — alpha above this triggers the boost (raised: 33° window alpha must not trigger)
-ALPHA_TURN_KP         =  1.5  # gain on (alpha - threshold) → extra right steer
+ALPHA_TURN_KP = 1.5  # gain on (alpha - threshold) → extra right steer
 
 # PD + feedback gains
-KP            = 0.8
-KD            = 0.15
-K_ALPHA       = 2.0   # wall-angle (alpha) feedback gain
-K_YAW         = 0.15  # IMU yaw-rate damping gain
-D_ERR_ALPHA   = 0.5   # exponential smoothing on derivative (1=raw, 0=frozen)
-MAX_ERROR     = 0.4   # clip distance error before PD
+KP = 0.8
+KD = 0.15
+K_ALPHA = 2.0  # wall-angle (alpha) feedback gain
+K_YAW = 0.15  # IMU yaw-rate damping gain
+D_ERR_ALPHA = 0.5  # exponential smoothing on derivative (1=raw, 0=frozen)
+MAX_ERROR = 0.4  # clip distance error before PD
 
 # Watchdog
-SCAN_TIMEOUT_S      =   1.0  # s — stop rover if no scan received for this long
+SCAN_TIMEOUT_S = 1.0  # s — stop rover if no scan received for this long
 
 # Output
 # SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
 # (positive angular.z = RIGHT on this rover, opposite REP-103)
-SIGN          = -1.0
-STEERING_TRIM =  0.0  # positive = trim right, negative = trim left (mechanical bias correction)
-MAX_STEER     =  2.0  # ±2.0 = full servo lock
-BASE_SPEED    =  1.20  # m/s nominal
-TURN_SPEED    =  0.45  # m/s minimum (wall-lost / corners)
+SIGN = -1.0
+STEERING_TRIM = (
+    0.0  # positive = trim right, negative = trim left (mechanical bias correction)
+)
+MAX_STEER = 2.0  # ±2.0 = full servo lock
+BASE_SPEED = 1.20  # m/s nominal
+TURN_SPEED = 0.45  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 
@@ -138,31 +148,33 @@ class WallFollowerNode(Node):
             global BASE_SPEED, TURN_SPEED
             BASE_SPEED = _override
             TURN_SPEED = min(TURN_SPEED, _override)
-            self.get_logger().info(f"speed_override active: BASE_SPEED={BASE_SPEED} m/s  TURN_SPEED={TURN_SPEED} m/s")
+            self.get_logger().info(
+                f"speed_override active: BASE_SPEED={BASE_SPEED} m/s  TURN_SPEED={TURN_SPEED} m/s"
+            )
 
         # PD state
-        self._prev_error   = 0.0
+        self._prev_error = 0.0
         self._prev_d_error = 0.0
-        self._prev_time    = None
+        self._prev_time = None
 
         # AVOID D-term state
-        self._prev_asymmetry   = 0.0
+        self._prev_asymmetry = 0.0
         self._prev_d_asymmetry = 0.0
 
         # AVOID confirm counter (debounce reflective false positives)
-        self._avoid_confirm    = 0
+        self._avoid_confirm = 0
 
         # Spike detector state
-        self._last_valid_D     = None
+        self._last_valid_D = None
         self._last_valid_alpha = None
-        self._last_valid_time  = None
+        self._last_valid_time = None
 
         # Right-wall sticky-recovery state
         self._right_lost_since = None  # seconds when right wall first went absent
-        self._valid_run        = 0     # consecutive valid scans since last loss
+        self._valid_run = 0  # consecutive valid scans since last loss
 
         # Both-walls-gone corner state machine
-        self._both_lost_since  = None  # seconds when both walls first gone
+        self._both_lost_since = None  # seconds when both walls first gone
 
         # Right-turn confirmation (debounce windows/small gaps)
         self._right_open_count = 0
@@ -171,8 +183,8 @@ class WallFollowerNode(Node):
         self._yaw_rate = 0.0
 
         # Cone index caches (built on first scan)
-        self._left_idx   = []
-        self._front_idx  = []
+        self._left_idx = []
+        self._front_idx = []
         self._center_idx = []
         self._idx_cached = False
 
@@ -232,15 +244,20 @@ class WallFollowerNode(Node):
     def _wrap(angle: float) -> float:
         return math.atan2(math.sin(angle), math.cos(angle))
 
-    def _ray_at_angle(self, msg: LaserScan, target_deg: float, half_win_deg: float) -> float:
+    def _ray_at_angle(
+        self, msg: LaserScan, target_deg: float, half_win_deg: float
+    ) -> float:
         """Mean of valid rays within half_win_deg of target_deg. NaN if none."""
         target = self._wrap(math.radians(target_deg))
-        half   = math.radians(half_win_deg)
+        half = math.radians(half_win_deg)
         readings = []
         for i, r in enumerate(msg.ranges):
             if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
                 continue
-            if abs(self._wrap(msg.angle_min + i * msg.angle_increment - target)) <= half:
+            if (
+                abs(self._wrap(msg.angle_min + i * msg.angle_increment - target))
+                <= half
+            ):
                 readings.append(r)
         return sum(readings) / len(readings) if readings else float("nan")
 
@@ -252,17 +269,19 @@ class WallFollowerNode(Node):
           D_ahead — projected perpendicular distance LOOK_AHEAD metres ahead
         Returns (nan, nan) when the perpendicular beam is missing.
         """
-        a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)  # forward-right diagonal
-        b = self._ray_at_angle(msg, RAY_B_DEG,  RAY_HALF_WIN_DEG)  # perpendicular-right
+        a = self._ray_at_angle(
+            msg, RAY_A_DEG, RAY_HALF_WIN_DEG
+        )  # forward-right diagonal
+        b = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)  # perpendicular-right
 
         if not math.isfinite(b):
             return float("nan"), float("nan")
         if not math.isfinite(a):
             return b, 0.0  # perpendicular only: no angle, distance is b
 
-        theta   = abs(math.radians(RAY_B_DEG - RAY_A_DEG))
-        alpha   = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
-        D_now   = b * math.cos(alpha)
+        theta = abs(math.radians(RAY_B_DEG - RAY_A_DEG))
+        alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
+        D_now = b * math.cos(alpha)
         D_ahead = D_now + LOOK_AHEAD * math.sin(alpha)
         return D_ahead, alpha
 
@@ -270,7 +289,9 @@ class WallFollowerNode(Node):
         n = len(msg.ranges)
         lo = math.radians(center_deg - half_deg)
         hi = math.radians(center_deg + half_deg)
-        return [i for i in range(n) if lo <= msg.angle_min + i * msg.angle_increment <= hi]
+        return [
+            i for i in range(n) if lo <= msg.angle_min + i * msg.angle_increment <= hi
+        ]
 
     # ------------------------------------------------------------------
     # Main scan callback
@@ -289,9 +310,9 @@ class WallFollowerNode(Node):
 
         # Build cone caches once
         if not self._idx_cached:
-            self._left_idx   = self._cone_indices(msg,  90.0, LEFT_CONE_DEG)
-            self._front_idx  = self._cone_indices(msg,   0.0, FRONT_CONE_DEG)
-            self._center_idx = self._cone_indices(msg,   0.0, CENTER_CONE_DEG)
+            self._left_idx = self._cone_indices(msg, 90.0, LEFT_CONE_DEG)
+            self._front_idx = self._cone_indices(msg, 0.0, FRONT_CONE_DEG)
+            self._center_idx = self._cone_indices(msg, 0.0, CENTER_CONE_DEG)
             self._idx_cached = True
             self.get_logger().info(
                 f"Cone caches: left={len(self._left_idx)} "
@@ -314,13 +335,17 @@ class WallFollowerNode(Node):
             """Percentile of valid rays — more robust than min against single-ray reflections."""
             v = ranges[idx]
             good = v[(v > msg.range_min) & (v < msg.range_max) & np.isfinite(v)]
-            return float(np.percentile(good, pct)) if len(good) else float(msg.range_max)
+            return (
+                float(np.percentile(good, pct)) if len(good) else float(msg.range_max)
+            )
 
         now_s = self.get_clock().now().nanoseconds * 1e-9
 
-        left_dist   = cone_mean(self._left_idx)
-        front_dist  = cone_min(self._front_idx)   # wide — used for slowing only
-        center_dist = cone_pct(self._center_idx, 30)  # 30th pct — robust against reflected rays
+        left_dist = cone_mean(self._left_idx)
+        front_dist = cone_min(self._front_idx)  # wide — used for slowing only
+        center_dist = cone_pct(
+            self._center_idx, 30
+        )  # 30th pct — robust against reflected rays
         D_ahead, alpha = self._right_wall_state(msg)
 
         # --- Crash avoidance: steer away from angled approaching wall ---
@@ -330,15 +355,20 @@ class WallFollowerNode(Node):
             self._avoid_confirm += 1
         else:
             self._avoid_confirm = 0
-        if (self._avoid_confirm >= AVOID_CONFIRM_SCANS
-                and center_dist < FRONT_AVOID_THRESH
-                and (self._both_lost_since is None or center_dist < AVOID_CRASH_CLOSE_DIST)):
+        if (
+            self._avoid_confirm >= AVOID_CONFIRM_SCANS
+            and center_dist < FRONT_AVOID_THRESH
+            and (self._both_lost_since is None or center_dist < AVOID_CRASH_CLOSE_DIST)
+        ):
             front_L = self._ray_at_angle(msg, +FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             front_R = self._ray_at_angle(msg, -FRONT_AVOID_DEG, RAY_HALF_WIN_DEG)
             if math.isfinite(front_L) and math.isfinite(front_R):
                 max_diag = center_dist * FRONT_AVOID_MAX_DIAG_MULT
                 rel_gap = front_L > max_diag or front_R > max_diag
-                abs_gap = front_R > FRONT_AVOID_ABS_GAP_THRESH or front_L > FRONT_AVOID_ABS_GAP_THRESH
+                abs_gap = (
+                    front_R > FRONT_AVOID_ABS_GAP_THRESH
+                    or front_L > FRONT_AVOID_ABS_GAP_THRESH
+                )
                 if (rel_gap or abs_gap) and center_dist > AVOID_CRASH_CLOSE_DIST:
                     reason = "abs" if abs_gap else "rel"
                     self.get_logger().info(
@@ -348,27 +378,35 @@ class WallFollowerNode(Node):
                     # fall through to normal wall following
                 else:
                     asymmetry = front_R - front_L
-                    speed = max(TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH))
+                    speed = max(
+                        TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH)
+                    )
                     self._prev_asymmetry = asymmetry
                     if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
                         # Angled wall (\ or /) — steer away from it
                         proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
                         # D term: rate of change of asymmetry (low-pass filtered)
                         raw_d_asym = asymmetry - self._prev_asymmetry
-                        d_asym = (FRONT_AVOID_D_ALPHA * raw_d_asym
-                                  + (1.0 - FRONT_AVOID_D_ALPHA) * self._prev_d_asymmetry)
+                        d_asym = (
+                            FRONT_AVOID_D_ALPHA * raw_d_asym
+                            + (1.0 - FRONT_AVOID_D_ALPHA) * self._prev_d_asymmetry
+                        )
                         self._prev_d_asymmetry = d_asym
-                        avoid_steer = (FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
-                                       + FRONT_AVOID_KD * d_asym)
+                        avoid_steer = (
+                            FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
+                            + FRONT_AVOID_KD * d_asym
+                        )
                         # Normal: right-turn track, never steer left unless very close.
                         # Close-approach escape: one diagonal may read far (genuine open corridor,
                         # not a glitch) — allow subtle left steer to bounce off the inner wall.
                         if center_dist < AVOID_CRASH_CLOSE_DIST:
-                            avoid_steer = max(-AVOID_CRASH_LEFT_MAX, min(MAX_STEER, avoid_steer))
+                            avoid_steer = max(
+                                -AVOID_CRASH_LEFT_MAX, min(MAX_STEER, avoid_steer)
+                            )
                         else:
                             avoid_steer = max(0.0, min(MAX_STEER, avoid_steer))
                         cmd = Twist()
-                        cmd.linear.x  = speed
+                        cmd.linear.x = speed
                         cmd.angular.z = avoid_steer
                         self._publish(cmd)
                         self.get_logger().info(
@@ -379,7 +417,7 @@ class WallFollowerNode(Node):
                     else:
                         # Symmetric solid wall (--------) — always turn right
                         cmd = Twist()
-                        cmd.linear.x  = speed
+                        cmd.linear.x = speed
                         cmd.angular.z = MAX_STEER  # full-lock RIGHT
                         self._publish(cmd)
                         self.get_logger().info(
@@ -419,14 +457,13 @@ class WallFollowerNode(Node):
                 self._right_lost_since = now_s
         else:
             self._valid_run += 1
-            self._last_valid_D     = D_ahead
+            self._last_valid_D = D_ahead
             self._last_valid_alpha = alpha
-            self._last_valid_time  = now_s
+            self._last_valid_time = now_s
 
         # Still "lost" until N consecutive valid scans confirm recovery
         right_gone = right_gone_now or (
-            self._right_lost_since is not None
-            and self._valid_run < LOST_RECOVERY_SCANS
+            self._right_lost_since is not None and self._valid_run < LOST_RECOVERY_SCANS
         )
         if not right_gone:
             self._right_lost_since = None
@@ -442,7 +479,7 @@ class WallFollowerNode(Node):
             lost_for = now_s - self._both_lost_since
 
             self._prev_error = self._prev_d_error = 0.0
-            self._prev_time  = now_s
+            self._prev_time = now_s
 
             cmd = Twist()
             cmd.linear.x = TURN_SPEED
@@ -466,7 +503,9 @@ class WallFollowerNode(Node):
         self._both_lost_since = None  # at least one wall present
 
         if not right_gone:
-            self._right_open_count = 0  # right wall present — reset confirmation counter
+            self._right_open_count = (
+                0  # right wall present — reset confirmation counter
+            )
 
         # ==============================================================
         # CASE 2: Only right wall gone
@@ -477,17 +516,23 @@ class WallFollowerNode(Node):
         if right_gone:
             ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
             # NaN/inf = no return at 45° = open space = hallway (same as far read)
-            open_hallway = (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY)
+            open_hallway = (not math.isfinite(ray_a)) or (
+                RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY
+            )
             if open_hallway:
                 self._right_open_count += 1
             else:
                 self._right_open_count = 0
 
-            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS and center_dist < 3.5:
+            if (
+                open_hallway
+                and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS
+                and center_dist < 3.5
+            ):
                 # Right hallway confirmed — only turn when front wall is within 3.5 m
                 # (alcoves in open corridors have clear fronts; real junctions have a wall ahead)
                 cmd = Twist()
-                cmd.linear.x  = TURN_SPEED
+                cmd.linear.x = TURN_SPEED
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
@@ -501,7 +546,7 @@ class WallFollowerNode(Node):
                     steer = KP * (WALL_SAFE_DIST - left_dist)
                     steer = min(steer, MAX_STEER)
                 cmd = Twist()
-                cmd.linear.x  = BASE_SPEED
+                cmd.linear.x = BASE_SPEED
                 cmd.angular.z = steer
                 self._publish(cmd)
                 self.get_logger().info(
@@ -519,12 +564,12 @@ class WallFollowerNode(Node):
         if self._prev_time is None:
             d_error = 0.0
         else:
-            dt      = now_s - self._prev_time
-            raw_d   = (error - self._prev_error) / dt if dt > 0 else 0.0
+            dt = now_s - self._prev_time
+            raw_d = (error - self._prev_error) / dt if dt > 0 else 0.0
             d_error = D_ERR_ALPHA * raw_d + (1.0 - D_ERR_ALPHA) * self._prev_d_error
-        self._prev_error   = error
+        self._prev_error = error
         self._prev_d_error = d_error
-        self._prev_time    = now_s
+        self._prev_time = now_s
 
         # Pre-sign: PD + alpha-feedback + IMU yaw damping
         pre_sign = KP * error + KD * d_error - K_ALPHA * alpha - K_YAW * self._yaw_rate
@@ -546,12 +591,16 @@ class WallFollowerNode(Node):
         # Speed: ease off as wall angle grows; slow for nearest front obstacle
         alpha_scale = math.radians(SPEED_ALPHA_SCALE_DEG)
         speed = max(TURN_SPEED, BASE_SPEED * max(0.0, 1.0 - abs(alpha) / alpha_scale))
-        near_dist = min(d for d in (center_dist, front_dist) if math.isfinite(d)) if (math.isfinite(center_dist) or math.isfinite(front_dist)) else float('inf')
+        near_dist = (
+            min(d for d in (center_dist, front_dist) if math.isfinite(d))
+            if (math.isfinite(center_dist) or math.isfinite(front_dist))
+            else float("inf")
+        )
         if near_dist < FRONT_SLOW_THRESH:
             speed = max(TURN_SPEED, speed * near_dist / FRONT_SLOW_THRESH)
 
         cmd = Twist()
-        cmd.linear.x  = speed
+        cmd.linear.x = speed
         cmd.angular.z = steering
         self._publish(cmd)
 

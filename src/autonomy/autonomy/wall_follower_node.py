@@ -55,7 +55,7 @@ SPIKE_STALE_S       =   0.7  # s — invalidate spike history after this gap
 LOST_RECOVERY_SCANS =     3
 
 # Corner handling (both walls gone)
-COAST_S             =   0.3  # s — coast straight before committing
+COAST_S             =   0.1  # s — coast straight before committing
 COMMIT_TURN_S       =   2.0  # s — duration of full-lock right turn
 
 # Left wall
@@ -96,7 +96,7 @@ AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, hal
 # When RAY_A reads close → doorway recess → go straight as normal.
 RIGHT_OPEN_THRESH       = 1.5  # m — RAY_A beyond this = right hallway confirmed
 RIGHT_HALLWAY_MAX_RAY   = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
-RIGHT_OPEN_CONFIRM_SCANS =   3  # consecutive "right gone + open" scans before committing to turn
+RIGHT_OPEN_CONFIRM_SCANS =   2  # consecutive "right gone + open" scans before committing to turn
 #                                  small windows trigger for 1-2 scans; real junctions are sustained
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.

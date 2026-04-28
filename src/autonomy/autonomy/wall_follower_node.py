@@ -437,41 +437,37 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone and left_gone:
             if self._both_lost_since is None:
-                # Gate on direct-right ray: a real hallway reads far (5m+); a room/alcove
-                # reads its back wall (2-3m) or NaN-filled window (also short). This
-                # discriminates the 4-way (right=corridor) from opposite alcoves (right=room).
-                ray_b_now = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)
-                if not (ray_b_now > 3.5):
-                    cmd = Twist()
-                    cmd.linear.x = BASE_SPEED
-                    cmd.angular.z = 0.0
-                    self._publish(cmd)
-                    self.get_logger().info(
-                        f"BOTH GONE but ray_b={ray_b_now:.2f}m — not a corridor, straight"
-                    )
-                    return
                 self._both_lost_since = now_s
             lost_for = now_s - self._both_lost_since
 
             self._prev_error = self._prev_d_error = 0.0
             self._prev_time  = now_s
 
+            # Check right side: real corridor reads far (3m+), room/alcove reads its back wall.
+            # Coast starts immediately regardless — only the turn is gated.
+            ray_b_now = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)
+            right_is_corridor = ray_b_now > 3.0
+
             cmd = Twist()
             cmd.linear.x = TURN_SPEED
             if lost_for < COAST_S:
                 cmd.angular.z = 0.0
                 mode = "coast"
-            elif lost_for < COAST_S + COMMIT_TURN_S:
-                cmd.angular.z = MAX_STEER   # full-lock RIGHT (positive = right)
+            elif lost_for < COAST_S + COMMIT_TURN_S and right_is_corridor:
+                cmd.angular.z = MAX_STEER
                 mode = "turn"
-            else:
-                cmd.angular.z = 0.0         # release; restarts next scan if still lost
+            elif lost_for >= COAST_S + COMMIT_TURN_S:
+                cmd.angular.z = 0.0
                 self._both_lost_since = None
                 mode = "release"
+            else:
+                cmd.angular.z = 0.0  # both gone but right is a room — go straight
+                mode = "alcoves"
 
             self._publish(cmd)
             self.get_logger().info(
-                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
+                f"BOTH GONE ({lost_for:.2f}s) {mode}  "
+                f"ray_b={ray_b_now:.2f}m  left={left_dist:.2f}"
             )
             return
 
@@ -495,15 +491,19 @@ class WallFollowerNode(Node):
             else:
                 self._right_open_count = 0
 
-            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS:
-                # Right hallway confirmed for N consecutive scans — turn right
+            # At a real T-junction the dead-end wall is close ahead (center_dist dropping).
+            # At a right-side alcove in a straight corridor the front is open (center_dist large).
+            at_junction = center_dist < 3.5
+
+            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS and at_junction:
+                # Right hallway confirmed and front wall approaching — real T-junction, turn right
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
                     f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  "
-                    f"n={self._right_open_count}  turning right"
+                    f"n={self._right_open_count}  ctr={center_dist:.2f}m  turning right"
                 )
             else:
                 # Not yet confirmed (window/transient) or doorway recess — go straight

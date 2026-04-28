@@ -298,10 +298,10 @@ class WallFollowerNode(Node):
     # ------------------------------------------------------------------
 
     def _mode_cb(self, msg: String):
-        if msg.data == "racing" and self._active:
+        if msg.data in ("saving", "ready", "racing") and self._active:
             self._active = False
             self._cmd_pub.publish(Twist())  # zero cmd_vel before handing off
-            self.get_logger().info("Mode → RACING: wall follower stopping")
+            self.get_logger().info(f"Mode → {msg.data.upper()}: wall follower stopping")
 
     def _scan_cb(self, msg: LaserScan):
         if not self._active:

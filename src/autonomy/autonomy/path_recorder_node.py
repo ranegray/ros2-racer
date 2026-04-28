@@ -40,7 +40,13 @@ class PathRecorderNode(Node):
         self._last_y = None
 
         self._saved = False
-        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
+        self._path_saved_pub = self.create_publisher(
+            String, "/slam_coordinator/path_saved", 10
+        )
+        # Coordinator triggers save explicitly; don't rely on racing mode message
+        self.create_subscription(
+            String, "/slam_coordinator/save_path", self._save_path_cb, 10
+        )
         self.create_timer(1.0 / RECORD_HZ, self._record_tick)
         self.get_logger().info(
             f"Path recorder started — will save to {self._output_path}"
@@ -76,9 +82,12 @@ class PathRecorderNode(Node):
         if len(self._poses) % 50 == 0:
             self.get_logger().info(f"Recorded {len(self._poses)} poses so far")
 
-    def _mode_cb(self, msg: String):
-        if msg.data == "racing" and not self._saved:
+    def _save_path_cb(self, msg: String):
+        if not self._saved:
             self._save()
+            pub_msg = String()
+            pub_msg.data = "saved"
+            self._path_saved_pub.publish(pub_msg)
 
     def _save(self):
         if not self._poses:

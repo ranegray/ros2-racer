@@ -44,6 +44,15 @@ def generate_launch_description():
         DeclareLaunchArgument("speed", default_value="0.35",
                               description="Racing speed (m/s)"),
 
+        # Scan filter — fills narrow gaps (glass/windows) before slam_toolbox sees the data
+        Node(
+            package="perception",
+            executable="scan_filter_node",
+            name="scan_filter_node",
+            output="screen",
+            parameters=[{"max_gap_deg": 30.0}],
+        ),
+
         # RPLIDAR A1
         Node(
             package="rplidar_ros",

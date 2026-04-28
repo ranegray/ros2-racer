@@ -482,19 +482,15 @@ class WallFollowerNode(Node):
             else:
                 self._right_open_count = 0
 
-            # At a real T-junction the dead-end wall is close ahead (center_dist dropping).
-            # At a right-side alcove in a straight corridor the front is open (center_dist large).
-            at_junction = center_dist < 3.5
-
-            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS and at_junction:
-                # Right hallway confirmed and front wall approaching — real T-junction, turn right
+            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS:
+                # Right hallway confirmed for N consecutive scans — turn right
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
                     f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  "
-                    f"n={self._right_open_count}  ctr={center_dist:.2f}m  turning right"
+                    f"n={self._right_open_count}  turning right"
                 )
             else:
                 # Not yet confirmed (window/transient) or doorway recess — go straight

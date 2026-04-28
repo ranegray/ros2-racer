@@ -128,7 +128,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[slam_config],
             ),
-            # rf2o laser odometry — uses filtered scan so glass gaps don't confuse velocity estimate
+            # rf2o laser odometry — velocity feedback only; odometry_node owns the odom TF
             Node(
                 package="rf2o_laser_odometry",
                 executable="rf2o_laser_odometry_node",
@@ -136,7 +136,7 @@ def generate_launch_description():
                 parameters=[{
                     "laser_scan_topic": "/scan_filtered",
                     "odom_topic": "/odom_rf2o",
-                    "publish_tf": True,
+                    "publish_tf": False,
                     "base_frame_id": "base_link",
                     "odom_frame_id": "odom",
                     "init_pose_from_topic": "",
@@ -181,6 +181,9 @@ def generate_launch_description():
                         "baud_rate": baud_rate,
                         "control_frequency": 20.0,
                         "imu_frequency": 20.0,
+                        "use_velocity_feedback": True,
+                        "kp_speed": 120.0,
+                        "ki_speed": 60.0,
                     }
                 ],
             ),

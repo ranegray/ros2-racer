@@ -106,7 +106,17 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Perception (lidar-derived front distance) ─────────────────────────
+    # ── 3. Scan filter — fills narrow gaps (glass/windows) before rf2o and wall_follower
+    scan_filter_node = Node(
+        package='perception',
+        executable='scan_filter_node',
+        name='scan_filter_node',
+        output='screen',
+        parameters=[{'max_gap_deg': 30.0}],
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 3b. Perception (lidar-derived front distance) ────────────────────────
     depth_node = Node(
         package='perception',
         executable='depth_node',
@@ -150,7 +160,7 @@ def generate_launch_description():
         executable='rf2o_laser_odometry_node',
         name='rf2o_laser_odometry',
         parameters=[{
-            'laser_scan_topic': '/scan',
+            'laser_scan_topic': '/scan_filtered',
             'odom_topic': '/odom_rf2o',
             'publish_tf': True,
             'base_frame_id': 'base_link',
@@ -179,6 +189,7 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(enable_lidar),
         parameters=[{'speed_override': 0.7}],  # slow for mapping lap; set -1.0 to use BASE_SPEED
+        remappings=[('/scan', '/scan_filtered')],
     )
 
     # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
@@ -276,6 +287,7 @@ def generate_launch_description():
 
         # Nodes (sensors first, bridge, then aggregators/infrastructure)
         lidar_node,
+        scan_filter_node,
         realsense_node,
         depth_node,
         static_tf_base_to_laser,

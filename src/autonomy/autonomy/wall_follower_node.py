@@ -84,8 +84,8 @@ AVOID_CONFIRM_SCANS = 2  # consecutive scans below thresh before AVOID fires
 FRONT_AVOID_DEG = 25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM = 0.15  # m — ignore asymmetry smaller than this
 FRONT_AVOID_KP = 2.2  # gain on asymmetry → steer correction
-FRONT_AVOID_KD = 0.5  # gain on rate-of-change of asymmetry
-FRONT_AVOID_D_ALPHA = 0.5  # low-pass on D term (0=frozen, 1=raw)
+FRONT_AVOID_KD = 2.5  # gain on rate-of-change of asymmetry (damps sudden flips from windows)
+FRONT_AVOID_D_ALPHA = 0.8  # low-pass on D term (0=frozen, 1=raw)
 # Gap detection: if a diagonal reads much further than centre, it passed through
 # a gap (doorway, window) — asymmetry is garbage, skip AVOID entirely.
 FRONT_AVOID_MAX_DIAG_MULT = 3.0  # diagonal > N × center_dist → relative gap
@@ -381,20 +381,22 @@ class WallFollowerNode(Node):
                     speed = max(
                         TURN_SPEED, BASE_SPEED * (center_dist / FRONT_AVOID_THRESH)
                     )
-                    self._prev_asymmetry = asymmetry
                     if abs(asymmetry) > FRONT_AVOID_MIN_ASYM:
                         # Angled wall (\ or /) — steer away from it
                         proximity = 1.0 - center_dist / FRONT_AVOID_THRESH
-                        # D term: rate of change of asymmetry (low-pass filtered)
+                        # D term: rate of change of asymmetry, computed BEFORE updating prev.
+                        # Subtracted (standard PD) so it DAMPS rapid flips rather than amplifying them.
+                        # A window glitch causes a large raw_d_asym → D-term opposes the flip.
                         raw_d_asym = asymmetry - self._prev_asymmetry
                         d_asym = (
                             FRONT_AVOID_D_ALPHA * raw_d_asym
                             + (1.0 - FRONT_AVOID_D_ALPHA) * self._prev_d_asymmetry
                         )
                         self._prev_d_asymmetry = d_asym
+                        self._prev_asymmetry = asymmetry
                         avoid_steer = (
                             FRONT_AVOID_KP * asymmetry * (1.0 + proximity)
-                            + FRONT_AVOID_KD * d_asym
+                            - FRONT_AVOID_KD * d_asym
                         )
                         # Normal: right-turn track, never steer left unless very close.
                         # Close-approach escape: one diagonal may read far (genuine open corridor,
@@ -416,6 +418,7 @@ class WallFollowerNode(Node):
                         )
                     else:
                         # Symmetric solid wall (--------) — always turn right
+                        self._prev_asymmetry = asymmetry  # keep prev fresh for D-term on re-entry
                         cmd = Twist()
                         cmd.linear.x = speed
                         cmd.angular.z = MAX_STEER  # full-lock RIGHT

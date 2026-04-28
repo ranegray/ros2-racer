@@ -6,6 +6,7 @@ type Props = {
   arrivedAt: number
   stalenessMs?: number
   plannedPath?: RosPath | null
+  inflatedMap?: OccupancyGrid | null
 }
 
 const BG = '#0b0f14'
@@ -18,6 +19,7 @@ function draw(
   canvas: HTMLCanvasElement,
   map: OccupancyGrid | null,
   plannedPath: RosPath | null | undefined,
+  inflatedMap: OccupancyGrid | null | undefined,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -82,6 +84,26 @@ function draw(
   ctx.imageSmoothingEnabled = false
   ctx.drawImage(off, offX, offY, drawW, drawH)
 
+  // Overlay inflated obstacles (semi-transparent red)
+  if (inflatedMap && inflatedMap.info.width === mw && inflatedMap.info.height === mh) {
+    const inflatedData = inflatedMap.data as number[]
+    const ovImg = ctx.createImageData(mw, mh)
+    const ovPx = ovImg.data
+    for (let row = 0; row < mh; row++) {
+      for (let col = 0; col < mw; col++) {
+        const rosIdx = (mh - 1 - row) * mw + col
+        const i = (row * mw + col) * 4
+        if ((inflatedData[rosIdx] ?? 0) >= 50) {
+          ovPx[i] = 255; ovPx[i+1] = 60; ovPx[i+2] = 60; ovPx[i+3] = 120
+        }
+      }
+    }
+    const ovOff = new OffscreenCanvas(mw, mh)
+    ovOff.getContext('2d')!.putImageData(ovImg, 0, 0)
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(ovOff, offX, offY, drawW, drawH)
+  }
+
   // Overlay planned path
   if (plannedPath && plannedPath.poses.length > 1) {
     const { resolution, origin } = map.info
@@ -126,24 +148,27 @@ export const MapPanel = memo(function MapPanel({
   arrivedAt,
   stalenessMs = 3000,
   plannedPath,
+  inflatedMap,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const mapRef = useRef<OccupancyGrid | null>(map)
   const pathRef = useRef<RosPath | null | undefined>(plannedPath)
+  const inflatedRef = useRef<OccupancyGrid | null | undefined>(inflatedMap)
   mapRef.current = map
   pathRef.current = plannedPath
+  inflatedRef.current = inflatedMap
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    draw(canvas, map, plannedPath)
-  }, [map, plannedPath])
+    draw(canvas, map, plannedPath, inflatedMap)
+  }, [map, plannedPath, inflatedMap])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current))
+    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current))
     ro.observe(canvas)
     return () => ro.disconnect()
   }, [])
@@ -167,6 +192,11 @@ export const MapPanel = memo(function MapPanel({
         {plannedPath && plannedPath.poses.length > 0 && (
           <span className="badge badge-live" style={{ marginLeft: 6, color: '#00e5ff' }}>
             path · {plannedPath.poses.length} pts
+          </span>
+        )}
+        {inflatedMap && (
+          <span className="badge badge-live" style={{ marginLeft: 6, color: '#ff6060' }}>
+            inflated
           </span>
         )}
       </div>

@@ -56,7 +56,8 @@ class PathPlannerNode(Node):
         self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
-        self._path_pub = self.create_publisher(Path, "/planned_path", 1)
+        self._path_pub     = self.create_publisher(Path,          "/planned_path",   1)
+        self._inflated_pub = self.create_publisher(OccupancyGrid, "/inflated_map",   1)
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, 1)
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
 
@@ -128,6 +129,14 @@ class PathPlannerNode(Node):
 
         def g2w(row, col):
             return ox + (col + 0.5) * res, oy + (row + 0.5) * res
+
+        # Publish inflated map for dashboard visualisation
+        inflated_msg = OccupancyGrid()
+        inflated_msg.header.stamp    = self.get_clock().now().to_msg()
+        inflated_msg.header.frame_id = "map"
+        inflated_msg.info            = self._map.info
+        inflated_msg.data            = [100 if v else 0 for v in inflated.flatten().tolist()]
+        self._inflated_pub.publish(inflated_msg)
 
         # Chain of waypoints: start → via[0] → … → via[-1] → start
         waypoints_world = via_world + [(start_wx, start_wy)]

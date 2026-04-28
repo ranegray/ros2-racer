@@ -96,8 +96,9 @@ AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, hal
 # When RAY_A reads close → doorway recess → go straight as normal.
 RIGHT_OPEN_THRESH       = 1.5  # m — RAY_A beyond this = right hallway confirmed
 RIGHT_HALLWAY_MAX_RAY   = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
-RIGHT_OPEN_CONFIRM_SCANS =   2  # consecutive "right gone + open" scans before committing to turn
-#                                  small windows trigger for 1-2 scans; real junctions are sustained
+RIGHT_OPEN_CONFIRM_SCANS =   2  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
+RIGHT_OPEN_CONFIRM_FAR   =  25  # scans when center is farther — outlasts a ~1 m doorway at 0.45 m/s
+RIGHT_OPEN_CLOSE_DIST    = 2.0  # m — below this the dead-end is close: use fast confirm
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.
 ALPHA_TURN_THRESH_DEG = 40.0  # degrees — alpha above this triggers the boost (raised: 33° window alpha must not trigger)

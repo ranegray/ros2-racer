@@ -2,6 +2,9 @@
 """
 slam_mapping_launch.py  —  Lap 1: build the map while wall-following.
 
+ros2 launch launch/slam_mapping_launch.py serial_port:=/dev/ttyLIDAR
+
+
 Nodes launched:
   rplidar_ros   rplidar_node       /scan
   autonomy      odometry_node      /odom + TF odom→base_link
@@ -25,12 +28,12 @@ Then kill this launch and run slam_racing_launch.py.
 import os
 
 from ament_index_python.packages import get_package_share_directory
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import AnyLaunchDescriptionSource
-from launch.actions import IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from launch import LaunchDescription
 
 
 def generate_launch_description():
@@ -75,7 +78,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "channel_type": "serial",
-                        "serial_port": "/dev/ttyUSB0",
+                        "serial_port": "/dev/ttyLIDAR",
                         "serial_baudrate": 115200,
                         "frame_id": "laser",
                         "inverted": False,
@@ -132,7 +135,7 @@ def generate_launch_description():
                 name="wall_follower_node",
                 output="screen",
                 parameters=[{"speed_override": 0.4}],
-            remappings=[('/scan', '/scan_filtered')],
+                remappings=[("/scan", "/scan_filtered")],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(
@@ -168,9 +171,9 @@ def generate_launch_description():
             IncludeLaunchDescription(
                 AnyLaunchDescriptionSource(
                     os.path.join(
-                        get_package_share_directory('rosbridge_server'),
-                        'launch',
-                        'rosbridge_websocket_launch.xml',
+                        get_package_share_directory("rosbridge_server"),
+                        "launch",
+                        "rosbridge_websocket_launch.xml",
                     )
                 )
             ),

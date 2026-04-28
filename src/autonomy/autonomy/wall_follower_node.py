@@ -458,7 +458,7 @@ class WallFollowerNode(Node):
 
             self._publish(cmd)
             self.get_logger().info(
-                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}"
+                f"BOTH GONE ({lost_for:.2f}s) {mode}  left={left_dist:.2f}  ctr={center_dist:.2f}m"
             )
             return
 
@@ -482,18 +482,19 @@ class WallFollowerNode(Node):
             else:
                 self._right_open_count = 0
 
-            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS:
-                # Right hallway confirmed for N consecutive scans — turn right
+            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS and center_dist < 3.5:
+                # Right hallway confirmed — only turn when front wall is within 3.5 m
+                # (alcoves in open corridors have clear fronts; real junctions have a wall ahead)
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  "
+                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
                     f"n={self._right_open_count}  turning right"
                 )
             else:
-                # Not yet confirmed (window/transient) or doorway recess — go straight
+                # Not yet confirmed (window/transient), doorway recess, or center too far — go straight
                 steer = 0.0
                 if left_dist < WALL_SAFE_DIST:
                     steer = KP * (WALL_SAFE_DIST - left_dist)
@@ -503,8 +504,8 @@ class WallFollowerNode(Node):
                 cmd.angular.z = steer
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  n={self._right_open_count}  "
-                    f"left={left_dist:.2f}  steer={steer:.2f}"
+                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
+                    f"n={self._right_open_count}  left={left_dist:.2f}  steer={steer:.2f}"
                 )
             return
 

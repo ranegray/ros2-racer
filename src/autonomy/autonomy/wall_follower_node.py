@@ -437,6 +437,17 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone and left_gone:
             if self._both_lost_since is None:
+                # Opposite alcoves look like a 4-way but the corridor ahead stays open.
+                # At a real corner the outer wall is close ahead — use that to discriminate.
+                if center_dist > 3.5:
+                    cmd = Twist()
+                    cmd.linear.x = BASE_SPEED
+                    cmd.angular.z = 0.0
+                    self._publish(cmd)
+                    self.get_logger().info(
+                        f"BOTH GONE but front clear ({center_dist:.2f}m) — straight"
+                    )
+                    return
                 self._both_lost_since = now_s
             lost_for = now_s - self._both_lost_since
 

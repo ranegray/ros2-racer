@@ -188,7 +188,7 @@ def generate_launch_description():
         name='wall_follower_node',
         output='screen',
         condition=IfCondition(enable_lidar),
-        parameters=[{'speed_override': 0.7}],  # slow for mapping lap; set -1.0 to use BASE_SPEED
+        parameters=[{'speed_override': 1.1}],  # slow for mapping lap; set -1.0 to use BASE_SPEED
         remappings=[('/scan', '/scan_filtered')],
     )
 

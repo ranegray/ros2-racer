@@ -19,7 +19,7 @@ import tf2_ros
 
 
 RECORD_HZ = 10.0
-MIN_DIST   = 0.05  # m — only store a new pose if we moved this far
+MIN_DIST   = 0.15  # m — only store a new pose if we moved this far
 
 
 class PathRecorderNode(Node):

@@ -72,9 +72,9 @@ class PathPlannerNode(Node):
         self._map = msg
 
     def _mode_cb(self, msg: String):
-        if msg.data == "racing" and not self._racing:
+        if msg.data in ("ready", "racing") and not self._racing:
             self._racing = True
-            self.get_logger().info("Racing mode — planning lap path...")
+            self.get_logger().info(f"{msg.data.upper()} mode — planning lap path...")
             self._plan()
 
     # ------------------------------------------------------------------

@@ -101,7 +101,7 @@ AVOID_CRASH_LEFT_MAX = 1.0  # max left steer in crash escape (subtle, half of fu
 RIGHT_OPEN_THRESH = 1.5  # m — RAY_A beyond this = right hallway confirmed
 RIGHT_HALLWAY_MAX_RAY = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
 RIGHT_OPEN_CONFIRM_SCANS = (
-    2  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
+    3  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
 )
 RIGHT_OPEN_CONFIRM_FAR = (
     25  # scans when center is farther — outlasts a ~1 m doorway at 0.45 m/s

@@ -94,7 +94,7 @@ AVOID_CRASH_LEFT_MAX       = 1.0   # max left steer in crash escape (subtle, hal
 # Right-turn junction detection
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
 # When RAY_A reads close → doorway recess → go straight as normal.
-RIGHT_OPEN_THRESH       = 2.0  # m — RAY_A beyond this = right hallway confirmed (raised: shallow alcoves read 1-1.5m, real corridors read 2m+)
+RIGHT_OPEN_THRESH       = 1.5  # m — RAY_A beyond this = right hallway confirmed
 RIGHT_HALLWAY_MAX_RAY   = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
 RIGHT_OPEN_CONFIRM_SCANS =   3  # consecutive "right gone + open" scans before committing to turn
 #                                  small windows trigger for 1-2 scans; real junctions are sustained
@@ -475,31 +475,22 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone:
             ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
-            ray_b = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)
-            # At a right-angle T-junction, ray_a (-45°) hits the corner and reads close
-            # even though the corridor is open. ray_b (-90°) directly sees the open hallway.
-            open_hallway = (
-                (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY)
-                or (not math.isfinite(ray_b)) or ray_b > RIGHT_OPEN_THRESH
-            )
+            # NaN/inf = no return at 45° = open space = hallway (same as far read)
+            open_hallway = (not math.isfinite(ray_a)) or (RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY)
             if open_hallway:
                 self._right_open_count += 1
             else:
                 self._right_open_count = 0
 
-            # Bypass confirmation count when front wall is close — at this point waiting
-            # costs more distance than the risk of a false positive.
-            front_urgent = center_dist < FRONT_SLOW_THRESH
-
-            if open_hallway and (self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS or front_urgent):
-                # Right hallway confirmed — turn right
+            if open_hallway and self._right_open_count >= RIGHT_OPEN_CONFIRM_SCANS:
+                # Right hallway confirmed for N consecutive scans — turn right
                 cmd = Twist()
                 cmd.linear.x  = TURN_SPEED
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m ray_b={ray_b:.2f}m "
-                    f"n={self._right_open_count} urgent={front_urgent}  turning right"
+                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  "
+                    f"n={self._right_open_count}  turning right"
                 )
             else:
                 # Not yet confirmed (window/transient) or doorway recess — go straight
@@ -512,8 +503,8 @@ class WallFollowerNode(Node):
                 cmd.angular.z = steer
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m ray_b={ray_b:.2f}m "
-                    f"n={self._right_open_count}  left={left_dist:.2f}  steer={steer:.2f}"
+                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  n={self._right_open_count}  "
+                    f"left={left_dist:.2f}  steer={steer:.2f}"
                 )
             return
 

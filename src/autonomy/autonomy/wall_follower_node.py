@@ -107,11 +107,6 @@ RIGHT_OPEN_CONFIRM_FAR = (
     25  # scans when center is farther — outlasts a ~1 m doorway at 0.45 m/s
 )
 RIGHT_OPEN_CLOSE_DIST = 2.0  # m — below this the dead-end is close: use fast confirm
-# Fan of right-side rays to measure angular width of opening.
-# A narrow window/alcove only opens a few degrees; a real hallway junction opens 90°+.
-# Rays at 22.5° intervals from -45° to -135° (5 rays). Require most to be open.
-RIGHT_FAN_DEGS = [-45.0, -67.5, -90.0, -112.5, -135.0]
-RIGHT_FAN_OPEN_MIN = 4  # out of 5 rays must be open to confirm a real junction
 # Alpha-based proactive right turn: when wall starts swinging away (alpha > threshold),
 # add extra rightward steering kick to start turning before the wall fully disappears.
 ALPHA_TURN_THRESH_DEG = 40.0  # degrees — alpha above this triggers the boost (raised: 33° window alpha must not trigger)
@@ -519,17 +514,11 @@ class WallFollowerNode(Node):
         #   close read → doorway recess → go straight
         # ==============================================================
         if right_gone:
-            # Sample a fan of right-side rays to measure the angular width of the opening.
-            # A narrow window/alcove only opens a few rays; a real hallway junction
-            # opens the whole right side (90°+ of arc across all 5 fan positions).
-            fan_reads = [self._ray_at_angle(msg, d, RAY_HALF_WIN_DEG) for d in RIGHT_FAN_DEGS]
-            fan_open = sum(
-                1 for r in fan_reads
-                if not math.isfinite(r) or RIGHT_OPEN_THRESH < r < RIGHT_HALLWAY_MAX_RAY
+            ray_a = self._ray_at_angle(msg, RAY_A_DEG, RAY_HALF_WIN_DEG)
+            # NaN/inf = no return at 45° = open space = hallway (same as far read)
+            open_hallway = (not math.isfinite(ray_a)) or (
+                RIGHT_OPEN_THRESH < ray_a < RIGHT_HALLWAY_MAX_RAY
             )
-            ray_a = fan_reads[0]  # -45° reading kept for logging
-            open_hallway = fan_open >= RIGHT_FAN_OPEN_MIN
-
             if open_hallway:
                 self._right_open_count += 1
             else:
@@ -547,11 +536,11 @@ class WallFollowerNode(Node):
                 cmd.angular.z = MAX_STEER
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  fan={fan_open}/{len(RIGHT_FAN_DEGS)}  "
-                    f"ctr={center_dist:.2f}m  n={self._right_open_count}  turning right"
+                    f"RIGHT GONE+HALLWAY  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
+                    f"n={self._right_open_count}  turning right"
                 )
             else:
-                # Not yet confirmed (window/transient), too narrow, or center too far — go straight
+                # Not yet confirmed (window/transient), doorway recess, or center too far — go straight
                 steer = 0.0
                 if left_dist < WALL_SAFE_DIST:
                     steer = KP * (WALL_SAFE_DIST - left_dist)
@@ -561,9 +550,8 @@ class WallFollowerNode(Node):
                 cmd.angular.z = steer
                 self._publish(cmd)
                 self.get_logger().info(
-                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  fan={fan_open}/{len(RIGHT_FAN_DEGS)}  "
-                    f"ctr={center_dist:.2f}m  n={self._right_open_count}  "
-                    f"left={left_dist:.2f}  steer={steer:.2f}"
+                    f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
+                    f"n={self._right_open_count}  left={left_dist:.2f}  steer={steer:.2f}"
                 )
             return
 

@@ -128,6 +128,23 @@ def generate_launch_description():
                 output="screen",
                 parameters=[slam_config],
             ),
+            # rf2o laser odometry — uses filtered scan so glass gaps don't confuse velocity estimate
+            Node(
+                package="rf2o_laser_odometry",
+                executable="rf2o_laser_odometry_node",
+                name="rf2o_laser_odometry",
+                parameters=[{
+                    "laser_scan_topic": "/scan_filtered",
+                    "odom_topic": "/odom_rf2o",
+                    "publish_tf": True,
+                    "base_frame_id": "base_link",
+                    "odom_frame_id": "odom",
+                    "init_pose_from_topic": "",
+                    "freq": 10.0,
+                }],
+                ros_arguments=["--log-level", "rf2o_laser_odometry:=FATAL"],
+                output="log",
+            ),
             # Wall follower — Lap 1 driver
             Node(
                 package="autonomy",

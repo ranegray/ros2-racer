@@ -437,15 +437,17 @@ class WallFollowerNode(Node):
         # ==============================================================
         if right_gone and left_gone:
             if self._both_lost_since is None:
-                # Opposite alcoves look like a 4-way but the corridor ahead stays open.
-                # At a real corner the outer wall is close ahead — use that to discriminate.
-                if center_dist > 3.5:
+                # Gate on direct-right ray: a real hallway reads far (5m+); a room/alcove
+                # reads its back wall (2-3m) or NaN-filled window (also short). This
+                # discriminates the 4-way (right=corridor) from opposite alcoves (right=room).
+                ray_b_now = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)
+                if not (ray_b_now > 3.5):
                     cmd = Twist()
                     cmd.linear.x = BASE_SPEED
                     cmd.angular.z = 0.0
                     self._publish(cmd)
                     self.get_logger().info(
-                        f"BOTH GONE but front clear ({center_dist:.2f}m) — straight"
+                        f"BOTH GONE but ray_b={ray_b_now:.2f}m — not a corridor, straight"
                     )
                     return
                 self._both_lost_since = now_s

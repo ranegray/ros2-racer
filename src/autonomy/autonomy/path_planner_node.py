@@ -153,18 +153,19 @@ class PathPlannerNode(Node):
             seg_goal  = self._nearest_free(seg_goal,  inflated, h, w)
 
             if seg_start is None or seg_goal is None:
-                self.get_logger().error(
-                    f"Segment {i}: start or goal stuck in obstacle — aborting"
+                self.get_logger().warn(
+                    f"Segment {i}: start or goal stuck in obstacle — skipping via-point"
                 )
-                return
+                # Keep prev_world unchanged so next segment starts from same point
+                continue
 
             cells = self._astar(inflated, seg_start, seg_goal, h, w)
             if cells is None:
-                self.get_logger().error(
+                self.get_logger().warn(
                     f"A* failed for segment {i} "
-                    f"({seg_start} → {seg_goal}) — aborting"
+                    f"({seg_start} → {seg_goal}) — skipping via-point"
                 )
-                return
+                continue
 
             all_cells.extend(cells[1:])  # skip first (already in list)
             prev_world = (gx, gy)
@@ -172,6 +173,10 @@ class PathPlannerNode(Node):
                 f"  Segment {i+1}/{len(waypoints_world)}: "
                 f"{len(cells)} cells"
             )
+
+        if len(all_cells) < 2:
+            self.get_logger().error("All segments failed — no path to publish")
+            return
 
         # Prune collinear waypoints
         pruned = self._prune(all_cells, inflated, w, h)
@@ -365,7 +370,7 @@ class PathPlannerNode(Node):
         obstacle: np.ndarray,
         h: int,
         w: int,
-        max_search: int = 20,
+        max_search: int = 50,
     ) -> tuple[int, int] | None:
         """BFS outward from cell to find nearest non-obstacle cell."""
         if not obstacle[cell[0], cell[1]]:

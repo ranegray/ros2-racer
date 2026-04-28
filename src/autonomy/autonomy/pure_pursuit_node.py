@@ -75,10 +75,16 @@ class PurePursuitNode(Node):
     def _path_cb(self, msg: Path):
         if not msg.poses:
             return
+        was_active = self._active and bool(self._path)
         self._path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
         self._closest_idx = 0
         self._done = False
-        self.get_logger().info(f"Received planned path with {len(self._path)} waypoints")
+        if was_active:
+            self.get_logger().info(
+                f"Planned path received mid-run — switching to {len(self._path)} waypoints"
+            )
+        else:
+            self.get_logger().info(f"Received planned path with {len(self._path)} waypoints")
 
     def _mode_cb(self, msg: String):
         if msg.data == "racing" and not self._active:

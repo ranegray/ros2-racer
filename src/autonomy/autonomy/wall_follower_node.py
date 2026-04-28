@@ -228,6 +228,8 @@ class WallFollowerNode(Node):
 
     def _watchdog_cb(self):
         """Stop the rover if no scan has arrived recently."""
+        if not self._active:
+            return
         now = self.get_clock().now().nanoseconds * 1e-9
         if self._last_scan_time > 0 and (now - self._last_scan_time) > SCAN_TIMEOUT_S:
             cmd = Twist()  # zero twist = stop

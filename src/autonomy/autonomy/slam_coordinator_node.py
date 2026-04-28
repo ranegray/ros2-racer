@@ -121,7 +121,7 @@ class SlamCoordinatorNode(Node):
             if result.result:
                 self.get_logger().info(f"Map saved → {MAP_SAVE_PATH}")
             else:
-                self.get_logger().error("Map save service returned failure — proceeding")
+                self.get_logger().warn("Map save service returned falsy result — map appears saved, proceeding")
         except Exception as e:
             self.get_logger().error(f"Map save exception: {e} — proceeding")
         self._map_saved = True

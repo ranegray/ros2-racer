@@ -50,7 +50,7 @@ class PathPlannerNode(Node):
 
         self.declare_parameter("path_file",
                                os.path.expanduser("~/.ros/recorded_path.yaml"))
-        self.declare_parameter("inflation_radius", 0.30)
+        self.declare_parameter("inflation_radius", 0.45)
 
         self._path_file = self.get_parameter("path_file").value
         self._infl_r    = self.get_parameter("inflation_radius").value

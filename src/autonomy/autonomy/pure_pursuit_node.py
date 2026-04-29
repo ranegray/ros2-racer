@@ -98,9 +98,28 @@ class PurePursuitNode(Node):
             self._active = True
             if not self._path:
                 self._load_fallback_path()
+            # Seed closest index from robot's actual position so we don't
+            # chase the path start from wherever lap 1 ended.
+            self._init_closest_idx()
             self.get_logger().info(
-                f"Mode → RACING: pure pursuit activated ({len(self._path)} waypoints)"
+                f"Mode → RACING: pure pursuit activated ({len(self._path)} waypoints), "
+                f"starting at path index {self._closest_idx}"
             )
+
+    def _init_closest_idx(self):
+        if not self._path:
+            return
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
+            return
+        rx = tf.transform.translation.x
+        ry = tf.transform.translation.y
+        best_idx = min(range(len(self._path)),
+                       key=lambda i: math.hypot(self._path[i][0] - rx,
+                                                self._path[i][1] - ry))
+        self._closest_idx = best_idx
 
     def _load_fallback_path(self):
         try:

@@ -15,6 +15,8 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
 import tf2_ros
 
 
@@ -43,6 +45,7 @@ class PathRecorderNode(Node):
         self._path_saved_pub = self.create_publisher(
             String, "/slam_coordinator/path_saved", 10
         )
+        self._path_viz_pub = self.create_publisher(Path, "/recorded_path", 10)
         # Coordinator triggers save explicitly; don't rely on racing mode message
         self.create_subscription(
             String, "/slam_coordinator/save_path", self._save_path_cb, 10
@@ -78,6 +81,20 @@ class PathRecorderNode(Node):
         self._last_x = x
         self._last_y = y
         self._poses.append({"x": float(x), "y": float(y), "qz": float(qz), "qw": float(qw)})
+
+        # Publish live path for dashboard visualisation
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = "map"
+        for p in self._poses:
+            ps = PoseStamped()
+            ps.header = path_msg.header
+            ps.pose.position.x = p["x"]
+            ps.pose.position.y = p["y"]
+            ps.pose.orientation.z = p["qz"]
+            ps.pose.orientation.w = p["qw"]
+            path_msg.poses.append(ps)
+        self._path_viz_pub.publish(path_msg)
 
         if len(self._poses) % 50 == 0:
             self.get_logger().info(f"Recorded {len(self._poses)} poses so far")

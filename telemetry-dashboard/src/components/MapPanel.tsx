@@ -7,6 +7,7 @@ type Props = {
   stalenessMs?: number
   plannedPath?: RosPath | null
   inflatedMap?: OccupancyGrid | null
+  recordedPath?: RosPath | null
 }
 
 const BG = '#0b0f14'
@@ -20,6 +21,7 @@ function draw(
   map: OccupancyGrid | null,
   plannedPath: RosPath | null | undefined,
   inflatedMap: OccupancyGrid | null | undefined,
+  recordedPath: RosPath | null | undefined,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -141,6 +143,25 @@ function draw(
     ctx.fill()
     ctx.restore()
   }
+
+  // Overlay recorded path (live waypoints during mapping lap)
+  if (recordedPath && recordedPath.poses.length > 0) {
+    const { resolution, origin } = map.info
+    const ox = origin.position.x
+    const oy = origin.position.y
+    const toCanvasX = (wx: number) => offX + ((wx - ox) / resolution) * scale
+    const toCanvasY = (wy: number) => offY + drawH - ((wy - oy) / resolution) * scale
+
+    ctx.save()
+    ctx.fillStyle = '#ff9900'
+    for (const pose of recordedPath.poses) {
+      const { x, y } = pose.pose.position
+      ctx.beginPath()
+      ctx.arc(toCanvasX(x), toCanvasY(y), 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
 }
 
 export const MapPanel = memo(function MapPanel({
@@ -149,26 +170,29 @@ export const MapPanel = memo(function MapPanel({
   stalenessMs = 3000,
   plannedPath,
   inflatedMap,
+  recordedPath,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const mapRef = useRef<OccupancyGrid | null>(map)
   const pathRef = useRef<RosPath | null | undefined>(plannedPath)
   const inflatedRef = useRef<OccupancyGrid | null | undefined>(inflatedMap)
+  const recordedRef = useRef<RosPath | null | undefined>(recordedPath)
   mapRef.current = map
   pathRef.current = plannedPath
   inflatedRef.current = inflatedMap
+  recordedRef.current = recordedPath
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    draw(canvas, map, plannedPath, inflatedMap)
-  }, [map, plannedPath, inflatedMap])
+    draw(canvas, map, plannedPath, inflatedMap, recordedPath)
+  }, [map, plannedPath, inflatedMap, recordedPath])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current))
+    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current, recordedRef.current))
     ro.observe(canvas)
     return () => ro.disconnect()
   }, [])

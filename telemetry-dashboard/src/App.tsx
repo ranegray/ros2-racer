@@ -56,6 +56,7 @@ function App() {
   const [map, setMap] = useState<OccupancyGrid | null>(null)
   const [mapArrivedAt, setMapArrivedAt] = useState(0)
   const [plannedPath, setPlannedPath] = useState<RosPath | null>(null)
+  const [recordedPath, setRecordedPath] = useState<RosPath | null>(null)
   const [inflatedMap, setInflatedMap] = useState<OccupancyGrid | null>(null)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
@@ -186,6 +187,18 @@ function App() {
       setPlannedPath(raw as unknown as RosPath)
     })
 
+    const recordedPathTopic = new ROSLIB.Topic({
+      ros,
+      name: '/recorded_path',
+      messageType: 'nav_msgs/msg/Path',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 1000,
+    })
+    recordedPathTopic.subscribe((raw) => {
+      setRecordedPath(raw as unknown as RosPath)
+    })
+
     const inflatedMapTopic = new ROSLIB.Topic({
       ros,
       name: '/inflated_map',
@@ -252,7 +265,7 @@ function App() {
         />
         <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
         <Charts samples={samples} />
-        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} />
+        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} recordedPath={recordedPath} />
       </div>
 
       <RawJson msg={latest} />

@@ -67,7 +67,7 @@ WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
 BALANCE_KP = 0.5  # left-wall balance correction gain
 
 # Right wall crash avoidance
-RIGHT_CRASH_THRESH = 1.0   # m — if D_ahead this close, proportional left steer override
+RIGHT_CRASH_THRESH = 0.6   # m — if D_ahead this close, proportional left steer override
 
 # Front safety
 FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only

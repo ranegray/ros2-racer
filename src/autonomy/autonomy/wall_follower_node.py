@@ -43,7 +43,7 @@ RAY_A_DEG = -45.0  # forward-right diagonal ray (degrees)
 RAY_B_DEG = -90.0  # perpendicular-right ray (degrees)
 RAY_HALF_WIN_DEG = 3.0  # cone half-width per ray (degrees)
 LOOK_AHEAD = 0.5  # m — lookahead for D_ahead projection
-TARGET_DIST = 0.8  # m — desired distance from right wall
+TARGET_DIST = 1.0  # m — desired distance from right wall
 MAX_PLAUSIBLE = 3.5  # m — beyond this = right wall gone
 
 # Spike detector (doorways cause brief spikes; corners cause sustained loss)
@@ -67,7 +67,7 @@ WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
 BALANCE_KP = 0.5  # left-wall balance correction gain
 
 # Right wall crash avoidance
-RIGHT_CRASH_THRESH = 0.6   # m — if D_ahead this close, proportional left steer override
+RIGHT_CRASH_THRESH = 0.4   # m — if D_ahead this close, proportional left steer override
 
 # Front safety
 FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only

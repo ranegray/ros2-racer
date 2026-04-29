@@ -116,7 +116,7 @@ class PathPlannerNode(Node):
         inflated_msg.data            = [100 if v else 0 for v in inflated.flatten().tolist()]
         self._inflated_pub.publish(inflated_msg)
 
-        # Load recorded path — use midpoint as the single A* via-point
+        # Load recorded path — use midpoint and 3/4 point as A* via-points
         try:
             with open(self._path_file) as f:
                 data = yaml.safe_load(f)
@@ -125,12 +125,13 @@ class PathPlannerNode(Node):
             self.get_logger().error(f"Failed to load recorded path: {e}")
             return
 
-        if len(poses) < 3:
+        if len(poses) < 4:
             self.get_logger().error("Recorded path too short to plan")
             return
 
-        mid = poses[len(poses) // 2]
-        mid_wx, mid_wy = mid["x"], mid["y"]
+        n    = len(poses)
+        mid  = poses[n // 2]
+        qt   = poses[n * 3 // 4]
 
         def w2g(wx, wy):
             return int(math.floor((wy - oy) / res)), int(math.floor((wx - ox) / res))
@@ -150,31 +151,32 @@ class PathPlannerNode(Node):
             self.get_logger().error(f"TF lookup failed: {e}")
             return
 
-        start_cell = self._nearest_free(w2g(start_wx, start_wy), inflated, h, w)
-        mid_cell   = self._nearest_free(w2g(mid_wx,   mid_wy),   inflated, h, w)
+        start_cell = self._nearest_free(w2g(start_wx,    start_wy),    inflated, h, w)
+        mid_cell   = self._nearest_free(w2g(mid["x"],    mid["y"]),    inflated, h, w)
+        qt_cell    = self._nearest_free(w2g(qt["x"],     qt["y"]),     inflated, h, w)
 
-        if start_cell is None or mid_cell is None:
-            self.get_logger().error("Start or midpoint stuck in obstacle — cannot plan")
+        if None in (start_cell, mid_cell, qt_cell):
+            self.get_logger().error("A via-point is stuck in an obstacle — cannot plan")
             return
 
         self.get_logger().info(
-            f"A* planning: start → midpoint (pose {len(poses)//2}/{len(poses)}) → start"
+            f"A* planning: start → mid (pose {n//2}) → 3/4 (pose {n*3//4}) → start"
         )
 
-        seg1 = self._astar(inflated, start_cell, mid_cell, h, w)
-        seg2 = self._astar(inflated, mid_cell, start_cell, h, w)
+        seg1 = self._astar(inflated, start_cell, mid_cell,  h, w)
+        seg2 = self._astar(inflated, mid_cell,   qt_cell,   h, w)
+        seg3 = self._astar(inflated, qt_cell,    start_cell, h, w)
 
-        if seg1 is None or seg2 is None:
-            self.get_logger().error(
-                f"A* failed — seg1={'ok' if seg1 else 'FAIL'}, seg2={'ok' if seg2 else 'FAIL'}"
-            )
+        failed = [i+1 for i, s in enumerate([seg1, seg2, seg3]) if s is None]
+        if failed:
+            self.get_logger().error(f"A* failed on segment(s): {failed}")
             return
 
         self.get_logger().info(
-            f"  seg1: {len(seg1)} cells, seg2: {len(seg2)} cells"
+            f"  seg1: {len(seg1)} cells, seg2: {len(seg2)} cells, seg3: {len(seg3)} cells"
         )
 
-        all_cells = seg1 + seg2[1:]  # skip duplicate midpoint
+        all_cells = seg1 + seg2[1:] + seg3[1:]  # skip duplicate junction points
 
         path_msg = Path()
         path_msg.header.stamp    = self.get_clock().now().to_msg()

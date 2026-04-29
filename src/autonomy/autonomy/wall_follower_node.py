@@ -66,6 +66,9 @@ WALL_GONE_THRESH = 1.8  # m — left wall absent above this
 WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
 BALANCE_KP = 0.5  # left-wall balance correction gain
 
+# Right wall crash avoidance
+RIGHT_CRASH_THRESH = 0.25  # m — if D_ahead this close, override PD and steer hard left
+
 # Front safety
 FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only
 CENTER_CONE_DEG = (
@@ -563,6 +566,17 @@ class WallFollowerNode(Node):
         # ==============================================================
         # CASE 3/4: Right wall present → F1TENTH PD (+ balance if left present)
         # ==============================================================
+
+        # Right wall too close — proportional left steer (mirrors FRONT_AVOID_KP logic)
+        if D_ahead < RIGHT_CRASH_THRESH:
+            steer = max(-MAX_STEER, -FRONT_AVOID_KP * (RIGHT_CRASH_THRESH - D_ahead))
+            cmd = Twist()
+            cmd.linear.x = TURN_SPEED
+            cmd.angular.z = steer
+            self._publish(cmd)
+            self.get_logger().info(f"RIGHT CRASH  D={D_ahead:.2f}m  steer={steer:+.2f}")
+            return
+
         error = TARGET_DIST - D_ahead
         error = max(-MAX_ERROR, min(MAX_ERROR, error))
 

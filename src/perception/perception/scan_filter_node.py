@@ -19,7 +19,7 @@ class ScanFilterNode(Node):
         super().__init__('scan_filter_node')
 
         self.declare_parameter('max_gap_deg', 30.0)
-        self.declare_parameter('inflate_deg', 10.0)
+        self.declare_parameter('inflate_deg', 8.0)
 
         _qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,

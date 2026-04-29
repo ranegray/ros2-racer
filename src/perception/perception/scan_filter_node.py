@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -17,6 +18,7 @@ class ScanFilterNode(Node):
         super().__init__('scan_filter_node')
 
         self.declare_parameter('max_gap_deg', 30.0)
+        self.declare_parameter('inflate_deg', 8.0)
 
         _qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -62,6 +64,17 @@ class ScanFilterNode(Node):
                     i = j
                 else:
                     i += 1
+
+            inflate_rays = int(math.radians(self.get_parameter('inflate_deg').value) / msg.angle_increment)
+            if inflate_rays > 0:
+                arr = np.array(ranges, dtype=np.float32)
+                n = len(arr)
+                padded = np.pad(arr, inflate_rays, mode='edge')
+                w = 2 * inflate_rays + 1
+                windows = np.lib.stride_tricks.as_strided(
+                    padded, shape=(n, w), strides=(padded.strides[0], padded.strides[0])
+                )
+                ranges = np.min(windows, axis=1).tolist()
 
             out = LaserScan()
             out.header = msg.header

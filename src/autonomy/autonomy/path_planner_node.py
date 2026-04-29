@@ -93,29 +93,7 @@ class PathPlannerNode(Node):
             self.get_logger().error("No map received — cannot plan")
             return
 
-        # Current robot pose = lap start
-        try:
-            tf = self._tf_buffer.lookup_transform(
-                "map", "base_link", rclpy.time.Time()
-            )
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
-                tf2_ros.ExtrapolationException) as e:
-            self.get_logger().error(f"TF lookup failed: {e}")
-            return
-
-        start_wx = tf.transform.translation.x
-        start_wy = tf.transform.translation.y
-
-        # Load recorded path and sample via-points
-        via_world = self._sample_via_points(start_wx, start_wy)
-        if via_world is None:
-            return
-
-        self.get_logger().info(
-            f"Planning through {len(via_world)} via-points + return to start"
-        )
-
-        # Build inflated obstacle grid once
+        # Build inflated obstacle grid for dashboard visualisation
         info   = self._map.info
         res    = info.resolution
         w      = info.width
@@ -128,19 +106,11 @@ class PathPlannerNode(Node):
 
         infl_cells = max(1, int(math.ceil(self._infl_r / res)))
         from scipy.ndimage import binary_dilation
-        # Disk structuring element — avoids 41% over-inflation at corners from a square
         _r = infl_cells
         _y, _x = np.ogrid[-_r:_r + 1, -_r:_r + 1]
         struct   = (_x ** 2 + _y ** 2) <= _r ** 2
         inflated = binary_dilation(obstacle, structure=struct)
 
-        def w2g(wx, wy):
-            return int(math.floor((wy - oy) / res)), int(math.floor((wx - ox) / res))
-
-        def g2w(row, col):
-            return ox + (col + 0.5) * res, oy + (row + 0.5) * res
-
-        # Publish inflated map for dashboard visualisation
         inflated_msg = OccupancyGrid()
         inflated_msg.header.stamp    = self.get_clock().now().to_msg()
         inflated_msg.header.frame_id = "map"
@@ -148,68 +118,34 @@ class PathPlannerNode(Node):
         inflated_msg.data            = [100 if v else 0 for v in inflated.flatten().tolist()]
         self._inflated_pub.publish(inflated_msg)
 
-        # Chain of waypoints: start → via[0] → … → via[-1] → start
-        waypoints_world = via_world + [(start_wx, start_wy)]
-        prev_world = (start_wx, start_wy)
-
-        all_cells: list[tuple[int, int]] = [w2g(start_wx, start_wy)]
-
-        for i, (gx, gy) in enumerate(waypoints_world):
-            seg_start = w2g(*prev_world)
-            seg_goal  = w2g(gx, gy)
-
-            # Nudge start/goal cells if they land inside inflated obstacles
-            seg_start = self._nearest_free(seg_start, inflated, h, w)
-            seg_goal  = self._nearest_free(seg_goal,  inflated, h, w)
-
-            if seg_start is None or seg_goal is None:
-                self.get_logger().warn(
-                    f"Segment {i}: start or goal stuck in obstacle — skipping via-point"
-                )
-                # Keep prev_world unchanged so next segment starts from same point
-                continue
-
-            cells = self._astar(inflated, seg_start, seg_goal, h, w)
-            if cells is None:
-                self.get_logger().warn(
-                    f"A* failed for segment {i} "
-                    f"({seg_start} → {seg_goal}) — skipping via-point"
-                )
-                continue
-
-            all_cells.extend(cells[1:])  # skip first (already in list)
-            prev_world = (gx, gy)
-            self.get_logger().info(
-                f"  Segment {i+1}/{len(waypoints_world)}: "
-                f"{len(cells)} cells"
-            )
-
-        if len(all_cells) < 2:
-            self.get_logger().error("All segments failed — no path to publish")
+        # Use recorded path directly as planned path
+        try:
+            with open(self._path_file) as f:
+                data = yaml.safe_load(f)
+            poses = data["poses"]
+        except Exception as e:
+            self.get_logger().error(f"Failed to load recorded path: {e}")
             return
 
-        # Prune collinear waypoints
-        pruned = self._prune(all_cells, inflated, w, h)
-        self.get_logger().info(
-            f"Total path: {len(all_cells)} cells → {len(pruned)} after pruning"
-        )
+        if not poses:
+            self.get_logger().error("Recorded path is empty")
+            return
 
-        # Publish
-        path_msg             = Path()
+        path_msg = Path()
         path_msg.header.stamp    = self.get_clock().now().to_msg()
         path_msg.header.frame_id = "map"
-        for r, c in pruned:
+        for p in poses:
             ps = PoseStamped()
             ps.header = path_msg.header
-            wx, wy = g2w(r, c)
-            ps.pose.position.x  = wx
-            ps.pose.position.y  = wy
-            ps.pose.orientation.w = 1.0
+            ps.pose.position.x    = p["x"]
+            ps.pose.position.y    = p["y"]
+            ps.pose.orientation.z = p.get("qz", 0.0)
+            ps.pose.orientation.w = p.get("qw", 1.0)
             path_msg.poses.append(ps)
 
         self._path_pub.publish(path_msg)
         self.get_logger().info(
-            f"Published planned path: {len(path_msg.poses)} waypoints"
+            f"Published planned path: {len(path_msg.poses)} waypoints (recorded path)"
         )
 
     # ------------------------------------------------------------------

@@ -135,7 +135,7 @@ STEERING_TRIM = (
 )
 MAX_STEER = 2.0  # ±2.0 = full servo lock
 BASE_SPEED = 1.20  # m/s nominal
-TURN_SPEED = 0.45  # m/s minimum (wall-lost / corners)
+TURN_SPEED = 0.55  # m/s minimum (wall-lost / corners)
 SPEED_ALPHA_SCALE_DEG = 90.0  # alpha (deg) at which speed hits TURN_SPEED
 # -----------------------------------------------------------------
 

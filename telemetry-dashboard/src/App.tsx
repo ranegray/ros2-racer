@@ -155,7 +155,7 @@ function App() {
           messageType: 'sensor_msgs/msg/LaserScan',
           compression: 'cbor',
           queue_length: 1,
-          throttle_rate: 0,
+          throttle_rate: 200,
         })
     scanTopic?.subscribe((raw) => {
       setScan(raw as unknown as LaserScan)

@@ -9,9 +9,10 @@ from sensor_msgs.msg import LaserScan
 
 class ScanFilterNode(Node):
     """
-    fills narrow max-range gaps in the LIDAR scan caused by glass windows/doors/indentations in the hallway.
-
-    Subscribes to /scan, interpolates gaps that are too narrow to be real hallways (< max_gap_deg), and republishes as /scan_filtered.  Both slam_toolbox andwall_follower_node subscribe to /scan_filtered so the map doesn't grow phantom openings where glass is.
+    Two outputs from /scan:
+      /scan_filtered — gap fill only. Used by slam_toolbox for accurate mapping.
+      /scan_nav      — gap fill + angular dilation. Used by wall_follower and
+                       pure_pursuit for conservative obstacle avoidance.
     """
 
     def __init__(self):
@@ -26,14 +27,16 @@ class ScanFilterNode(Node):
             depth=1,
         )
         self.create_subscription(LaserScan, '/scan', self._scan_cb, _qos)
-        self._pub = self.create_publisher(LaserScan, '/scan_filtered', _qos)
+        self._pub     = self.create_publisher(LaserScan, '/scan_filtered', _qos)
+        self._pub_nav = self.create_publisher(LaserScan, '/scan_nav', _qos)
 
-        self.get_logger().info('scan_filter_node ready — publishing /scan_filtered')
+        self.get_logger().info('scan_filter_node ready — /scan_filtered (SLAM), /scan_nav (navigation)')
 
     def _scan_cb(self, msg: LaserScan):
         try:
             if msg.angle_increment <= 0 or not msg.ranges:
                 self._pub.publish(msg)
+                self._pub_nav.publish(msg)
                 return
 
             max_gap_rays = int(math.radians(
@@ -65,32 +68,43 @@ class ScanFilterNode(Node):
                 else:
                     i += 1
 
+            def make_msg(r):
+                out = LaserScan()
+                out.header        = msg.header
+                out.angle_min     = msg.angle_min
+                out.angle_max     = msg.angle_max
+                out.angle_increment = msg.angle_increment
+                out.time_increment  = msg.time_increment
+                out.scan_time     = msg.scan_time
+                out.range_min     = msg.range_min
+                out.range_max     = msg.range_max
+                out.ranges        = r
+                out.intensities   = list(msg.intensities)
+                return out
+
+            # /scan_filtered — clean gap-fill only, for slam_toolbox
+            self._pub.publish(make_msg(ranges))
+
+            # /scan_nav — gap-fill + angular dilation, for wall_follower / pure_pursuit
             inflate_rays = int(math.radians(self.get_parameter('inflate_deg').value) / msg.angle_increment)
             if inflate_rays > 0:
-                arr = np.array(ranges, dtype=np.float32)
-                n = len(arr)
+                arr    = np.array(ranges, dtype=np.float32)
                 padded = np.pad(arr, inflate_rays, mode='edge')
-                w = 2 * inflate_rays + 1
+                w      = 2 * inflate_rays + 1
                 windows = np.lib.stride_tricks.as_strided(
-                    padded, shape=(n, w), strides=(padded.strides[0], padded.strides[0])
+                    padded,
+                    shape=(n, w),
+                    strides=(padded.strides[0], padded.strides[0]),
                 )
-                ranges = np.min(windows, axis=1).tolist()
+                nav_ranges = np.min(windows, axis=1).tolist()
+            else:
+                nav_ranges = ranges
+            self._pub_nav.publish(make_msg(nav_ranges))
 
-            out = LaserScan()
-            out.header = msg.header
-            out.angle_min = msg.angle_min
-            out.angle_max = msg.angle_max
-            out.angle_increment = msg.angle_increment
-            out.time_increment = msg.time_increment
-            out.scan_time = msg.scan_time
-            out.range_min = msg.range_min
-            out.range_max = msg.range_max
-            out.ranges = ranges
-            out.intensities = list(msg.intensities)
-            self._pub.publish(out)
         except Exception as e:
             self.get_logger().error(f'Filter error: {e}', throttle_duration_sec=5.0)
-            self._pub.publish(msg)  # pass through raw scan so nothing downstream starves
+            self._pub.publish(msg)
+            self._pub_nav.publish(msg)
 
 
 def main(args=None):

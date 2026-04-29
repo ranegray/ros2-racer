@@ -67,7 +67,7 @@ WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
 BALANCE_KP = 0.5  # left-wall balance correction gain
 
 # Right wall crash avoidance
-RIGHT_CRASH_THRESH = 0.25  # m — if D_ahead this close, override PD and steer hard left
+RIGHT_CRASH_THRESH = 1.0   # m — if D_ahead this close, proportional left steer override
 
 # Front safety
 FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only
@@ -200,7 +200,7 @@ class WallFollowerNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             depth=1,
         )
-        self.create_subscription(LaserScan, "/scan_filtered", self._scan_cb, _scan_qos)
+        self.create_subscription(LaserScan, "/scan_nav", self._scan_cb, _scan_qos)
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
         self._active = True  # False when racing mode takes over
 

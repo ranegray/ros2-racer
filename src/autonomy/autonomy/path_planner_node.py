@@ -50,12 +50,10 @@ class PathPlannerNode(Node):
 
         self.declare_parameter("path_file",
                                os.path.expanduser("~/.ros/recorded_path.yaml"))
-        self.declare_parameter("num_via_points", 6)
         self.declare_parameter("inflation_radius", 0.30)
 
-        self._path_file   = self.get_parameter("path_file").value
-        self._num_via     = self.get_parameter("num_via_points").value
-        self._infl_r      = self.get_parameter("inflation_radius").value
+        self._path_file = self.get_parameter("path_file").value
+        self._infl_r    = self.get_parameter("inflation_radius").value
 
         self._map: OccupancyGrid | None = None
         self._racing = False
@@ -69,8 +67,8 @@ class PathPlannerNode(Node):
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
 
         self.get_logger().info(
-            f"Path planner ready — via_points={self._num_via}, "
-            f"inflation={self._infl_r:.2f} m. Waiting for racing mode."
+            f"Path planner ready — inflation={self._infl_r:.2f} m, "
+            f"A* via recorded-path midpoint. Waiting for racing mode."
         )
 
     # ------------------------------------------------------------------
@@ -93,13 +91,13 @@ class PathPlannerNode(Node):
             self.get_logger().error("No map received — cannot plan")
             return
 
-        # Build inflated obstacle grid for dashboard visualisation
-        info   = self._map.info
-        res    = info.resolution
-        w      = info.width
-        h      = info.height
-        ox     = info.origin.position.x
-        oy     = info.origin.position.y
+        # Build inflated obstacle grid
+        info = self._map.info
+        res  = info.resolution
+        w    = info.width
+        h    = info.height
+        ox   = info.origin.position.x
+        oy   = info.origin.position.y
 
         grid_data = np.array(self._map.data, dtype=np.int16).reshape(h, w)
         obstacle  = (grid_data >= OBSTACLE_THRESH) | (grid_data < 0)
@@ -118,7 +116,7 @@ class PathPlannerNode(Node):
         inflated_msg.data            = [100 if v else 0 for v in inflated.flatten().tolist()]
         self._inflated_pub.publish(inflated_msg)
 
-        # Use recorded path directly as planned path
+        # Load recorded path — use midpoint as the single A* via-point
         try:
             with open(self._path_file) as f:
                 data = yaml.safe_load(f)
@@ -127,123 +125,73 @@ class PathPlannerNode(Node):
             self.get_logger().error(f"Failed to load recorded path: {e}")
             return
 
-        if not poses:
-            self.get_logger().error("Recorded path is empty")
+        if len(poses) < 3:
+            self.get_logger().error("Recorded path too short to plan")
             return
+
+        mid = poses[len(poses) // 2]
+        mid_wx, mid_wy = mid["x"], mid["y"]
+
+        def w2g(wx, wy):
+            return int(math.floor((wy - oy) / res)), int(math.floor((wx - ox) / res))
+
+        def g2w(row, col):
+            return ox + (col + 0.5) * res, oy + (row + 0.5) * res
+
+        # Get current robot pose for start cell
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                "map", "base_link", rclpy.time.Time()
+            )
+            start_wx = tf.transform.translation.x
+            start_wy = tf.transform.translation.y
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self.get_logger().error(f"TF lookup failed: {e}")
+            return
+
+        start_cell = self._nearest_free(w2g(start_wx, start_wy), inflated, h, w)
+        mid_cell   = self._nearest_free(w2g(mid_wx,   mid_wy),   inflated, h, w)
+
+        if start_cell is None or mid_cell is None:
+            self.get_logger().error("Start or midpoint stuck in obstacle — cannot plan")
+            return
+
+        self.get_logger().info(
+            f"A* planning: start → midpoint (pose {len(poses)//2}/{len(poses)}) → start"
+        )
+
+        seg1 = self._astar(inflated, start_cell, mid_cell, h, w)
+        seg2 = self._astar(inflated, mid_cell, start_cell, h, w)
+
+        if seg1 is None or seg2 is None:
+            self.get_logger().error(
+                f"A* failed — seg1={'ok' if seg1 else 'FAIL'}, seg2={'ok' if seg2 else 'FAIL'}"
+            )
+            return
+
+        self.get_logger().info(
+            f"  seg1: {len(seg1)} cells, seg2: {len(seg2)} cells"
+        )
+
+        all_cells = seg1 + seg2[1:]  # skip duplicate midpoint
 
         path_msg = Path()
         path_msg.header.stamp    = self.get_clock().now().to_msg()
         path_msg.header.frame_id = "map"
-        for p in poses:
+        for r, c in all_cells:
             ps = PoseStamped()
             ps.header = path_msg.header
-            ps.pose.position.x    = p["x"]
-            ps.pose.position.y    = p["y"]
-            ps.pose.orientation.z = p.get("qz", 0.0)
-            ps.pose.orientation.w = p.get("qw", 1.0)
+            wx, wy = g2w(r, c)
+            ps.pose.position.x    = wx
+            ps.pose.position.y    = wy
+            ps.pose.orientation.w = 1.0
             path_msg.poses.append(ps)
 
         self._path_pub.publish(path_msg)
         self.get_logger().info(
-            f"Published planned path: {len(path_msg.poses)} waypoints (recorded path)"
+            f"Published planned path: {len(path_msg.poses)} waypoints (A* via midpoint)"
         )
-
-    # ------------------------------------------------------------------
-    # Sample evenly-spaced via-points from the recorded path
-    # ------------------------------------------------------------------
-
-    def _sample_via_points(
-        self, start_wx: float, start_wy: float
-    ) -> list[tuple[float, float]] | None:
-        try:
-            with open(self._path_file) as f:
-                data = yaml.safe_load(f)
-            poses = data["poses"]
-        except Exception as e:
-            self.get_logger().error(f"Failed to load recorded path: {e}")
-            return None
-
-        if len(poses) < self._num_via + 1:
-            self.get_logger().warn(
-                f"Recorded path only has {len(poses)} poses — using all"
-            )
-            return [(p["x"], p["y"]) for p in poses]
-
-        # ------------------------------------------------------------------
-        # Filter to "balanced" (straight) portions only.
-        #
-        # Compute curvature = |dθ/ds| at each pose:
-        #   θ   from stored qz/qw (yaw = 2*atan2(qz, qw))
-        #   ds  from Euclidean distance to next pose
-        #
-        # A sliding window (±WINDOW poses) smooths noise. Poses whose
-        # smoothed curvature exceeds CURVATURE_THRESH rad/m are corners and
-        # are excluded from via-point candidacy.
-        # ------------------------------------------------------------------
-        CURVATURE_THRESH = 0.35   # rad/m — below this = straight/balanced
-        WINDOW           = 5      # half-width of smoothing window
-
-        n = len(poses)
-        yaws = [2.0 * math.atan2(p.get("qz", 0.0), p.get("qw", 1.0))
-                for p in poses]
-
-        # Arc-length between consecutive poses
-        dists = [
-            math.hypot(poses[i+1]["x"] - poses[i]["x"],
-                       poses[i+1]["y"] - poses[i]["y"])
-            for i in range(n - 1)
-        ]
-
-        # Instantaneous |dθ/ds| (guard against zero ds)
-        def wrap(a):
-            return math.atan2(math.sin(a), math.cos(a))
-
-        raw_curv = [
-            abs(wrap(yaws[i+1] - yaws[i])) / max(dists[i], 0.01)
-            for i in range(n - 1)
-        ]
-        raw_curv.append(raw_curv[-1])  # pad to length n
-
-        # Smooth curvature with a sliding window max (conservative: a pose is
-        # "in a corner" if any nearby pose has high curvature)
-        smoothed = []
-        for i in range(n):
-            lo = max(0, i - WINDOW)
-            hi = min(n, i + WINDOW + 1)
-            smoothed.append(max(raw_curv[lo:hi]))
-
-        straight_idxs = [
-            i for i, c in enumerate(smoothed)
-            if c < CURVATURE_THRESH
-            and i > 0               # skip very start
-            and i < n - 1           # skip very end
-        ]
-
-        self.get_logger().info(
-            f"Recorded path: {n} poses, {len(straight_idxs)} in straight sections "
-            f"(curvature < {CURVATURE_THRESH:.2f} rad/m)"
-        )
-
-        if len(straight_idxs) < self._num_via:
-            self.get_logger().warn(
-                "Not enough straight poses for requested via-points — "
-                "lowering threshold and using all straight poses"
-            )
-            return [(poses[i]["x"], poses[i]["y"]) for i in straight_idxs]
-
-        # Sample num_via evenly from the straight candidates (by position in
-        # the list, not by index, so spacing is even around the course)
-        step = len(straight_idxs) / (self._num_via + 1)
-        sel  = [straight_idxs[int(round((k + 1) * step))]
-                for k in range(self._num_via)]
-        sel  = [min(i, len(straight_idxs) - 1) for i in sel]
-        via  = [(poses[i]["x"], poses[i]["y"]) for i in sel]
-
-        self.get_logger().info(
-            f"Sampled {len(via)} via-points from straight sections "
-            f"(pose indices: {sel})"
-        )
-        return via
 
     # ------------------------------------------------------------------
     # A* search

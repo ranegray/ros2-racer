@@ -64,7 +64,7 @@ COMMIT_TURN_S = 2.0  # s — duration of full-lock right turn
 LEFT_CONE_DEG = 20  # ± degrees around +90° for left-wall rays
 WALL_GONE_THRESH = 1.8  # m — left wall absent above this
 WALL_SAFE_DIST = 1.0  # m — nudge away if remaining wall closer than this
-BALANCE_KP = 0.3  # left-wall balance correction gain
+BALANCE_KP = 0.5  # left-wall balance correction gain
 
 # Front safety
 FRONT_CONE_DEG = 40  # ± degrees around 0° — wide cone for slowing only
@@ -83,7 +83,7 @@ FRONT_AVOID_THRESH = 2.8  # m — start applying angle correction
 AVOID_CONFIRM_SCANS = 2  # consecutive scans below thresh before AVOID fires
 FRONT_AVOID_DEG = 25.0  # degrees for the diagonal front rays
 FRONT_AVOID_MIN_ASYM = 0.15  # m — ignore asymmetry smaller than this
-FRONT_AVOID_KP = 2.2  # gain on asymmetry → steer correction
+FRONT_AVOID_KP = 1.8  # gain on asymmetry → steer correction
 FRONT_AVOID_KD = 2.5  # gain on rate-of-change of asymmetry (damps sudden flips from windows)
 FRONT_AVOID_D_ALPHA = 0.8  # low-pass on D term (0=frozen, 1=raw)
 # Gap detection: if a diagonal reads much further than centre, it passed through

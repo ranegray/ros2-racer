@@ -161,6 +161,25 @@ def generate_launch_description():
                 name="path_recorder_node",
                 output="screen",
             ),
+            # Path planner — waits for "ready"/"racing" mode, then A* plans on the built map
+            Node(
+                package="autonomy",
+                executable="path_planner_node",
+                name="path_planner_node",
+                output="screen",
+            ),
+            # Pure pursuit — inactive until coordinator publishes "racing" mode
+            Node(
+                package="autonomy",
+                executable="pure_pursuit_node",
+                name="pure_pursuit_node",
+                output="screen",
+                parameters=[{
+                    "speed": 1.10,
+                    "lookahead": 0.5,
+                    "wheelbase": 0.165,
+                }],
+            ),
             # Mode coordinator
             Node(
                 package="autonomy",

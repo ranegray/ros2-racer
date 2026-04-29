@@ -30,10 +30,17 @@ import os
 import yaml
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Path
 from std_msgs.msg import String
 import tf2_ros
+
+_LATCHED_QOS = QoSProfile(
+    depth=1,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=ReliabilityPolicy.RELIABLE,
+)
 
 
 class PurePursuitNode(Node):
@@ -42,7 +49,7 @@ class PurePursuitNode(Node):
 
         self.declare_parameter("path_file", os.path.expanduser("~/.ros/recorded_path.yaml"))
         self.declare_parameter("lookahead", 0.5)
-        self.declare_parameter("speed", 0.30)
+        self.declare_parameter("speed", 1.10)
         self.declare_parameter("wheelbase", 0.165)
         self.declare_parameter("goal_tolerance", 0.3)
 
@@ -62,7 +69,7 @@ class PurePursuitNode(Node):
         self._cmd_pub     = self.create_publisher(Twist, "cmd_vel", 10)
 
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
-        self.create_subscription(Path, "/planned_path", self._path_cb, 1)
+        self.create_subscription(Path, "/planned_path", self._path_cb, _LATCHED_QOS)
 
         self.create_timer(0.05, self._control_loop)  # 20 Hz
         self.get_logger().info(

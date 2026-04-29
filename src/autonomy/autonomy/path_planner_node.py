@@ -121,11 +121,14 @@ class PathPlannerNode(Node):
 
         infl_cells = max(1, int(math.ceil(self._infl_r / res)))
         from scipy.ndimage import binary_dilation
-        struct   = np.ones((2 * infl_cells + 1, 2 * infl_cells + 1), dtype=bool)
+        # Disk structuring element — avoids 41% over-inflation at corners from a square
+        _r = infl_cells
+        _y, _x = np.ogrid[-_r:_r + 1, -_r:_r + 1]
+        struct   = (_x ** 2 + _y ** 2) <= _r ** 2
         inflated = binary_dilation(obstacle, structure=struct)
 
         def w2g(wx, wy):
-            return int((wy - oy) / res), int((wx - ox) / res)
+            return int(math.floor((wy - oy) / res)), int(math.floor((wx - ox) / res))
 
         def g2w(row, col):
             return ox + (col + 0.5) * res, oy + (row + 0.5) * res
@@ -290,7 +293,7 @@ class PathPlannerNode(Node):
         step = len(straight_idxs) / (self._num_via + 1)
         sel  = [straight_idxs[int(round((k + 1) * step))]
                 for k in range(self._num_via)]
-        sel  = [min(i, n - 1) for i in sel]
+        sel  = [min(i, len(straight_idxs) - 1) for i in sel]
         via  = [(poses[i]["x"], poses[i]["y"]) for i in sel]
 
         self.get_logger().info(

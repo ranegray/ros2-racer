@@ -112,7 +112,7 @@ class PurePursuitNode(Node):
     # ------------------------------------------------------------------
 
     def _control_loop(self):
-        if not self._active or self._done or not self._path:
+        if not self._active or not self._path:
             return
 
         try:
@@ -127,29 +127,26 @@ class PurePursuitNode(Node):
         qw = tf.transform.rotation.w
         robot_yaw = 2.0 * math.atan2(qz, qw)
 
-        # Goal reached?
-        gx, gy = self._path[-1]
-        if math.hypot(rx - gx, ry - gy) < self._goal_tol:
-            self.get_logger().info("Goal reached — stopping")
-            self._done = True
-            self._cmd_pub.publish(Twist())
-            return
-
-        # Advance closest index
-        while self._closest_idx < len(self._path) - 1:
-            cx, cy = self._path[self._closest_idx]
-            nx, ny = self._path[self._closest_idx + 1]
+        # Advance closest index (wraps for closed loop — _closest_idx is unbounded)
+        n = len(self._path)
+        for _ in range(n):
+            curr = self._closest_idx % n
+            nxt  = (self._closest_idx + 1) % n
+            cx, cy = self._path[curr]
+            nx, ny = self._path[nxt]
             if math.hypot(rx - nx, ry - ny) < math.hypot(rx - cx, ry - cy):
                 self._closest_idx += 1
             else:
                 break
 
-        # Find lookahead point at arc-length L_d ahead of closest
+        # Find lookahead point at arc-length L_d ahead (wraps for closed loop)
         lookahead_pt = None
         accum = 0.0
-        for i in range(self._closest_idx, len(self._path) - 1):
+        for k in range(n):
+            i = (self._closest_idx + k) % n
+            j = (self._closest_idx + k + 1) % n
             ax, ay = self._path[i]
-            bx, by = self._path[i + 1]
+            bx, by = self._path[j]
             seg_len = math.hypot(bx - ax, by - ay)
             if accum + seg_len >= self._L_d:
                 t = (self._L_d - accum) / seg_len
@@ -158,7 +155,7 @@ class PurePursuitNode(Node):
             accum += seg_len
 
         if lookahead_pt is None:
-            lookahead_pt = self._path[-1]
+            lookahead_pt = self._path[self._closest_idx % n]
 
         lx, ly = lookahead_pt
         dx = lx - rx

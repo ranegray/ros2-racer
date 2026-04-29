@@ -42,7 +42,7 @@ class SlamCoordinatorNode(Node):
         # Outbound
         self._mode_pub = self.create_publisher(String, "/slam_coordinator/mode", 10)
         self._save_path_pub = self.create_publisher(
-            String, "/slam_coordinator/save_path", 1
+            String, "/slam_coordinator/save_path", 10
         )
         self._status_pub = self.create_publisher(
             String, "/telemetry/internal_state", 10
@@ -101,7 +101,7 @@ class SlamCoordinatorNode(Node):
     # ------------------------------------------------------------------
 
     def _save_map(self):
-        if not self._save_map_client.wait_for_service(timeout_sec=3.0):
+        if not self._save_map_client.service_is_ready():
             self.get_logger().error(
                 "slam_toolbox/save_map not available — proceeding without map save"
             )

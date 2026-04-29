@@ -197,7 +197,7 @@ class WallFollowerNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             depth=1,
         )
-        self.create_subscription(LaserScan, "/scan", self._scan_cb, _scan_qos)
+        self.create_subscription(LaserScan, "/scan_filtered", self._scan_cb, _scan_qos)
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
         self._active = True  # False when racing mode takes over
 

@@ -29,10 +29,17 @@ import yaml
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 import tf2_ros
+
+_LATCHED_QOS = QoSProfile(
+    depth=1,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=ReliabilityPolicy.RELIABLE,
+)
 
 OBSTACLE_THRESH = 50
 
@@ -56,8 +63,8 @@ class PathPlannerNode(Node):
         self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
-        self._path_pub     = self.create_publisher(Path,          "/planned_path",   1)
-        self._inflated_pub = self.create_publisher(OccupancyGrid, "/inflated_map",   1)
+        self._path_pub     = self.create_publisher(Path,          "/planned_path",  _LATCHED_QOS)
+        self._inflated_pub = self.create_publisher(OccupancyGrid, "/inflated_map",  _LATCHED_QOS)
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, 1)
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
 

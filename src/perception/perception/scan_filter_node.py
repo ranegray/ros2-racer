@@ -43,63 +43,66 @@ class ScanFilterNode(Node):
                 self.get_parameter('max_gap_deg').value
             ) / msg.angle_increment)
 
-            ranges = list(msg.ranges)
-            n = len(ranges)
+            raw = list(msg.ranges)
+            n = len(raw)
 
             def bad(r):
                 return not math.isfinite(r) or r < msg.range_min or r > msg.range_max
 
+            def make_msg(r):
+                out = LaserScan()
+                out.header          = msg.header
+                out.angle_min       = msg.angle_min
+                out.angle_max       = msg.angle_max
+                out.angle_increment = msg.angle_increment
+                out.time_increment  = msg.time_increment
+                out.scan_time       = msg.scan_time
+                out.range_min       = msg.range_min
+                out.range_max       = msg.range_max
+                out.ranges          = r
+                out.intensities     = list(msg.intensities)
+                return out
+
+            # /scan_filtered — raw ranges only, no gap fill.
+            # slam_toolbox handles inf/NaN correctly (no return = free space).
+            # Gap-filling here adds phantom walls in glass/open areas that corrupt the map.
+            self._pub.publish(make_msg(raw))
+
+            # /scan_nav — gap fill + angular dilation, for wall_follower / pure_pursuit.
+            # Conservative: fill short gaps with min(neighbors) so glass doesn't look like open space.
+            nav = list(raw)
             i = 0
             while i < n:
-                if bad(ranges[i]):
+                if bad(nav[i]):
                     j = i
-                    while j < n and bad(ranges[j]):
+                    while j < n and bad(nav[j]):
                         j += 1
                     gap_len = j - i
                     if gap_len <= max_gap_rays:
-                        left = next((ranges[k] for k in range(i - 1, -1, -1) if not bad(ranges[k])), None)
-                        right = next((ranges[k] for k in range(j, n) if not bad(ranges[k])), None)
+                        left  = next((nav[k] for k in range(i - 1, -1, -1) if not bad(nav[k])), None)
+                        right = next((nav[k] for k in range(j, n)          if not bad(nav[k])), None)
                         candidates = [v for v in (left, right) if v is not None]
                         if candidates:
                             fill = min(candidates)
                             for k in range(i, j):
-                                ranges[k] = fill
+                                nav[k] = fill
                     i = j
                 else:
                     i += 1
 
-            def make_msg(r):
-                out = LaserScan()
-                out.header        = msg.header
-                out.angle_min     = msg.angle_min
-                out.angle_max     = msg.angle_max
-                out.angle_increment = msg.angle_increment
-                out.time_increment  = msg.time_increment
-                out.scan_time     = msg.scan_time
-                out.range_min     = msg.range_min
-                out.range_max     = msg.range_max
-                out.ranges        = r
-                out.intensities   = list(msg.intensities)
-                return out
-
-            # /scan_filtered — clean gap-fill only, for slam_toolbox
-            self._pub.publish(make_msg(ranges))
-
-            # /scan_nav — gap-fill + angular dilation, for wall_follower / pure_pursuit
             inflate_rays = int(math.radians(self.get_parameter('inflate_deg').value) / msg.angle_increment)
             if inflate_rays > 0:
-                arr    = np.array(ranges, dtype=np.float32)
-                padded = np.pad(arr, inflate_rays, mode='edge')
-                w      = 2 * inflate_rays + 1
+                arr     = np.array(nav, dtype=np.float32)
+                padded  = np.pad(arr, inflate_rays, mode='edge')
+                w       = 2 * inflate_rays + 1
                 windows = np.lib.stride_tricks.as_strided(
                     padded,
                     shape=(n, w),
                     strides=(padded.strides[0], padded.strides[0]),
                 )
-                nav_ranges = np.min(windows, axis=1).tolist()
-            else:
-                nav_ranges = ranges
-            self._pub_nav.publish(make_msg(nav_ranges))
+                nav = np.min(windows, axis=1).tolist()
+
+            self._pub_nav.publish(make_msg(nav))
 
         except Exception as e:
             self.get_logger().error(f'Filter error: {e}', throttle_duration_sec=5.0)

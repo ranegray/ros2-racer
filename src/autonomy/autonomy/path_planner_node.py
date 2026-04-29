@@ -129,9 +129,12 @@ class PathPlannerNode(Node):
             self.get_logger().error("Recorded path too short to plan")
             return
 
-        n    = len(poses)
-        mid  = poses[n // 2]
-        qt   = poses[n * 3 // 4]
+        n = len(poses)
+        # Four evenly-spaced via-points force A* to go around the full loop
+        # in the correct direction rather than backtracking the short way.
+        wp1 = poses[n // 4]
+        wp2 = poses[n // 2]
+        wp3 = poses[n * 3 // 4]
 
         def w2g(wx, wy):
             return int(math.floor((wy - oy) / res)), int(math.floor((wx - ox) / res))
@@ -151,32 +154,36 @@ class PathPlannerNode(Node):
             self.get_logger().error(f"TF lookup failed: {e}")
             return
 
-        start_cell = self._nearest_free(w2g(start_wx,    start_wy),    inflated, h, w)
-        mid_cell   = self._nearest_free(w2g(mid["x"],    mid["y"]),    inflated, h, w)
-        qt_cell    = self._nearest_free(w2g(qt["x"],     qt["y"]),     inflated, h, w)
+        start_cell = self._nearest_free(w2g(start_wx,  start_wy),  inflated, h, w)
+        cell1      = self._nearest_free(w2g(wp1["x"],  wp1["y"]),  inflated, h, w)
+        cell2      = self._nearest_free(w2g(wp2["x"],  wp2["y"]),  inflated, h, w)
+        cell3      = self._nearest_free(w2g(wp3["x"],  wp3["y"]),  inflated, h, w)
 
-        if None in (start_cell, mid_cell, qt_cell):
+        if None in (start_cell, cell1, cell2, cell3):
             self.get_logger().error("A via-point is stuck in an obstacle — cannot plan")
             return
 
         self.get_logger().info(
-            f"A* planning: start → mid (pose {n//2}) → 3/4 (pose {n*3//4}) → start"
+            f"A* planning: start → 1/4 (pose {n//4}) → 1/2 (pose {n//2}) "
+            f"→ 3/4 (pose {n*3//4}) → start"
         )
 
-        seg1 = self._astar(inflated, start_cell, mid_cell,  h, w)
-        seg2 = self._astar(inflated, mid_cell,   qt_cell,   h, w)
-        seg3 = self._astar(inflated, qt_cell,    start_cell, h, w)
+        seg1 = self._astar(inflated, start_cell, cell1,      h, w)
+        seg2 = self._astar(inflated, cell1,      cell2,      h, w)
+        seg3 = self._astar(inflated, cell2,      cell3,      h, w)
+        seg4 = self._astar(inflated, cell3,      start_cell, h, w)
 
-        failed = [i+1 for i, s in enumerate([seg1, seg2, seg3]) if s is None]
+        failed = [i+1 for i, s in enumerate([seg1, seg2, seg3, seg4]) if s is None]
         if failed:
             self.get_logger().error(f"A* failed on segment(s): {failed}")
             return
 
         self.get_logger().info(
-            f"  seg1: {len(seg1)} cells, seg2: {len(seg2)} cells, seg3: {len(seg3)} cells"
+            f"  seg1: {len(seg1)} cells, seg2: {len(seg2)} cells, "
+            f"seg3: {len(seg3)} cells, seg4: {len(seg4)} cells"
         )
 
-        all_cells = seg1 + seg2[1:] + seg3[1:]  # skip duplicate junction points
+        all_cells = seg1 + seg2[1:] + seg3[1:] + seg4[1:]
 
         path_msg = Path()
         path_msg.header.stamp    = self.get_clock().now().to_msg()

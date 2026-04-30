@@ -83,14 +83,16 @@ class WallNavNode(Node):
         # away through a corner. Final command:
         # sign * (kp·err + kd·dE − k_alpha·α).
         self.declare_parameter("k_alpha", 2.0)
-        # Clip |α| used in the steering equation. With k_alpha=2.0, an
-        # uncapped α=35° (typical for a diagonal beam reading through a
-        # window) contributes -1.22 rad/s to steering — 60% of full lock
-        # before any other term. Capping at 25° keeps α-feedback's max
-        # contribution to ~0.87, so PD/yaw still have headroom and a
-        # bogus α can't single-handedly slam the steering into the wall.
-        # Real sharp corners are handled by the wall-lost commit, not α.
-        self.declare_parameter("max_alpha_deg", 25.0)
+        # Clip |α| used in the steering equation. Recessed doorways and
+        # windows produce geometrically-real α swings (the wall actually
+        # does step away briefly) that the controller cannot distinguish
+        # from a real corner approach without temporal context. Capping
+        # at 15° limits α-feedback's contribution to ~0.52 of max_steer
+        # so transient features can't aggressively pull the car into
+        # them. Real sharp corners are handled by the wall-lost commit
+        # cycle when the perp beam clears the wall — α-feedback is
+        # purely for smooth turn-in on gradual curvature.
+        self.declare_parameter("max_alpha_deg", 15.0)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)

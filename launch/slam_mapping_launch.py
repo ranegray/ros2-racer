@@ -10,7 +10,7 @@ Nodes launched:
   autonomy      odometry_node      /odom + TF odom→base_link
   autonomy      imu_adapter_node   /imu
   slam_toolbox  async_slam_toolbox /map + TF map→odom
-  autonomy      wall_follower_node /cmd_vel
+  autonomy      wall_nav_node      /cmd_vel (PD wall follower)
   autonomy      path_recorder_node records map→base_link poses to YAML
   autonomy      slam_coordinator   /slam_coordinator/mode
   robo_rover    rover_node         MAVLink driver
@@ -145,14 +145,13 @@ def generate_launch_description():
                 ros_arguments=["--log-level", "rf2o_laser_odometry:=FATAL"],
                 output="log",
             ),
-            # Wall follower — Lap 1 driver
+            # Wall nav — Lap 1 driver (PD wall follower, subscribes to /scan directly)
             Node(
                 package="autonomy",
-                executable="wall_follower_node",
-                name="wall_follower_node",
+                executable="wall_nav_node",
+                name="wall_nav_node",
                 output="screen",
-                parameters=[{"speed_override": 1.00}],
-                remappings=[("/scan", "/scan_filtered")],
+                parameters=[{"forward_speed": 1.00}],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(

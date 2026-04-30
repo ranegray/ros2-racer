@@ -238,6 +238,7 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit
         self.declare_parameter("avoid_crash_close_dist", 1.5)     # m -- allow left escape
         self.declare_parameter("avoid_crash_left_max", 1.0)       # max left steer
+        self.declare_parameter("avoid_max_speed", 0.6)            # m/s cap during any avoid
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -484,7 +485,8 @@ class WallNavNode(Node):
                 max_steer_v = self.get_parameter("max_steering").value
                 v_max_v = self.get_parameter("forward_speed").value
                 proximity = 1.0 - fwd / front_avoid_thresh
-                avoid_speed = max(v_min, v_max_v * (fwd / front_avoid_thresh))
+                avoid_max_speed = self.get_parameter("avoid_max_speed").value
+                avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / front_avoid_thresh)))
                 asymmetry = front_R - front_L
 
                 if abs(asymmetry) > min_asym:

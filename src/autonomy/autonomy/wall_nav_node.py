@@ -501,7 +501,7 @@ class WallNavNode(Node):
                         avoid_kp * asymmetry * (1.0 + proximity)
                         - avoid_kd * d_asym
                     )
-                    avoid_steer = max(-crash_left_max, min(max_steer_v, avoid_steer))
+                    avoid_steer = min(max_steer_v, avoid_steer)
                     avoid_steer += bias
                     cmd = Twist()
                     cmd.linear.x = float(avoid_speed)

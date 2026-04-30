@@ -80,6 +80,7 @@ class WallNavNode(Node):
         self._prev_asymmetry = 0.0
         self._prev_d_asymmetry = 0.0
         self._avoid_confirm = 0
+        self._gap_confirm = 0
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
@@ -134,10 +135,6 @@ class WallNavNode(Node):
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
-        # Gap threading: narrow forward cone. If wall detected inside this
-        # distance, steer right until it clears.
-        self.declare_parameter("gap_fwd_deg", 4.0)
-        self.declare_parameter("gap_fwd_thresh", 2.0)
         self.declare_parameter("target_distance", 0.30)
         self.declare_parameter("forward_speed", 2.00)
         # Two-ray look-ahead estimator. Angles measured from the car's
@@ -164,7 +161,7 @@ class WallNavNode(Node):
         self.declare_parameter("steering_sign", -1.0)
         # Constant steering offset (in the *post-sign* frame) to trim a
         # mechanically off-centre servo.
-        self.declare_parameter("steering_bias", 0.2)
+        self.declare_parameter("steering_bias", 0.15)
         # Wall-loss handling. Doorways/windows lose the right wall
         # briefly; right-turn corners lose it for good. Coast straight
         # for `lost_coast_s` to clear short gaps, then commit a fixed-
@@ -232,6 +229,13 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
+        # Gap threading: fwd blocked + right diagonal open → steer right.
+        self.declare_parameter("gap_fwd_thresh", 2.5)             # m -- fwd counts as blocked
+        self.declare_parameter("gap_diag_mult", 1.5)              # diag_R must be > fwd * this
+        self.declare_parameter("gap_confirm_scans", 3)            # scans to confirm
+        # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
+        self.declare_parameter("gap_slow_thresh", 2.5)            # m -- start slowing
+        self.declare_parameter("gap_slow_min_speed", 0.6)         # m/s floor while slowing
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
         self.declare_parameter("front_avoid_kp", 0.3)
@@ -437,19 +441,45 @@ class WallNavNode(Node):
             self.cmd_pub.publish(Twist())
             return
 
+        # Narrow ±2° forward cone speed cap: ramp down from v_max to
+        # gap_slow_min_speed as the narrow beam closes from gap_slow_thresh to 0.
+        gap_slow_thresh = self.get_parameter("gap_slow_thresh").value
+        gap_slow_min = self.get_parameter("gap_slow_min_speed").value
+        fwd_narrow = self._ray_at_angle(msg, 0.0, math.radians(2.0))
+        if math.isfinite(fwd_narrow) and fwd_narrow < gap_slow_thresh:
+            t = max(0.0, fwd_narrow / gap_slow_thresh)
+            v_max = gap_slow_min + t * (v_max - gap_slow_min)
+
         # --- Gap threading -------------------------------------------------------
-        # Narrow ±gap_fwd_deg cone straight ahead. If a wall is within
-        # gap_fwd_thresh, steer right until the cone clears. Robot
-        # naturally threads gaps by turning toward open space.
+        # Condition: fwd blocked (< gap_fwd_thresh) AND right diagonal open
+        # (diag_R > fwd * gap_diag_mult). Confirms N scans then steers right.
         gap_fwd_thresh = self.get_parameter("gap_fwd_thresh").value
-        gap_fwd_half = math.radians(self.get_parameter("gap_fwd_deg").value)
-        gap_fwd = self._ray_at_angle(msg, 0.0, gap_fwd_half)
-        if math.isfinite(gap_fwd) and gap_fwd < gap_fwd_thresh:
+        gap_diag_mult = self.get_parameter("gap_diag_mult").value
+        gap_confirm_scans = self.get_parameter("gap_confirm_scans").value
+        # Sample near-center (-2°) and far-diagonal (-45°) rays.
+        # As robot approaches a gap: near ray hits the wall (~fwd), far ray
+        # stays open (large). When far ray also closes, the gap has passed.
+        near_R = self._ray_at_angle(msg, math.radians(-2.0), math.radians(3.0))
+        diag_R = self._ray_at_angle(msg, math.radians(-45.0), math.radians(5.0))
+        range_max = float(msg.range_max)
+        near_R = near_R if math.isfinite(near_R) else range_max
+        diag_R = diag_R if math.isfinite(diag_R) else range_max
+        # Near side blocked AND diagonal still open → gap to the right
+        near_blocked = near_R < gap_fwd_thresh
+        right_open = diag_R > near_R * gap_diag_mult
+        if near_blocked and right_open:
+            self._gap_confirm += 1
+        else:
+            self._gap_confirm = 0
+        if self._gap_confirm >= gap_confirm_scans:
+            self._gap_confirm = gap_confirm_scans  # stay armed
             cmd = Twist()
-            cmd.linear.x = 0.4
-            cmd.angular.z = float(self.get_parameter("max_steering").value)  # full-lock RIGHT
+            cmd.linear.x = float(self.get_parameter("commit_speed").value)
+            cmd.angular.z = float(self.get_parameter("max_steering").value)
             self.cmd_pub.publish(cmd)
-            self.get_logger().info(f"GAP fwd_narrow={gap_fwd:.2f}m — steering right")
+            self.get_logger().info(
+                f"GAP near={near_R:.2f}m diag={diag_R:.2f}m — steering right"
+            )
             return
 
         # --- Front crash avoidance -----------------------------------------------

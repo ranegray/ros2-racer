@@ -93,6 +93,18 @@ class WallNavNode(Node):
         # cycle when the perp beam clears the wall — α-feedback is
         # purely for smooth turn-in on gradual curvature.
         self.declare_parameter("max_alpha_deg", 15.0)
+        # Raw a/b sanity check: through-glass returns push the diagonal
+        # beam to >>b·√2 in a way that real geometry rarely does without
+        # the perp beam ALSO losing the wall shortly after. Reject the
+        # diagonal (and α-feedback) when the RAW (pre-dilation) ratio
+        # exceeds this. Real walls give a/b in [√2, ~2.5]; sharp corner
+        # approaches reach a/b≈3 just before the lost cycle takes over;
+        # through-glass routinely hits 5+. Threshold 4.0 catches the
+        # egregious cases without cutting off pre-corner turn-in.
+        # Checked BEFORE dilation — once dilation pulls the bogus
+        # diagonal back toward neighbour wall returns, the ratio looks
+        # plausible and this signal is gone.
+        self.declare_parameter("diagonal_max_ab_ratio", 4.0)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
@@ -315,7 +327,23 @@ class WallNavNode(Node):
                     nearest = r
         return nearest
 
-    def _right_wall_state(self, msg: LaserScan):
+    def _diagonal_geometrically_invalid(self, msg: LaserScan) -> bool:
+        """Pre-dilation sanity check: did the diagonal beam read so much
+        farther than the perpendicular that real wall geometry can't
+        explain it? Through-glass returns produce a/b ratios well above
+        what any real wall slope can reach — this catches them before
+        the dilation smooths the signal away."""
+        ray_a_deg = self.get_parameter("ray_a_deg").value
+        ray_b_deg = self.get_parameter("ray_b_deg").value
+        half = math.radians(self.get_parameter("ray_half_window_deg").value)
+        a_raw = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
+        b_raw = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
+        if not math.isfinite(a_raw) or not math.isfinite(b_raw) or b_raw < 0.1:
+            return False
+        ratio = self.get_parameter("diagonal_max_ab_ratio").value
+        return a_raw > ratio * b_raw
+
+    def _right_wall_state(self, msg: LaserScan, force_diagonal_invalid: bool = False):
         """
         Return (D_ahead, alpha):
           alpha   — car's heading angle relative to the wall (0 = parallel).
@@ -331,7 +359,7 @@ class WallNavNode(Node):
 
         a = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
         b = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-        a_ok = math.isfinite(a)
+        a_ok = math.isfinite(a) and not force_diagonal_invalid
         b_ok = math.isfinite(b)
 
         # Perpendicular (-90°) beam missing: report wall lost. Don't fall
@@ -345,16 +373,9 @@ class WallNavNode(Node):
         if not b_ok:
             return float("nan"), float("nan")
 
-        # Note: deliberately no geometric sanity check on a/b here.
-        # Real right-corner approach IS "a grows large while b stays
-        # normal" — that's the signal we use for early turn-in via
-        # α-feedback. Rejecting large a/b would suppress the very thing
-        # we need to detect corners. Through-glass false positives are
-        # mitigated upstream (dilation) and downstream (α clip) without
-        # killing the corner signal.
-
-        # Forward-diagonal missing: perpendicular only, no look-ahead.
-        # `b` is by definition the right wall, so this is safe.
+        # Forward-diagonal missing or rejected by raw-geometry sanity
+        # check: perpendicular only, no look-ahead, no α-feedback. `b`
+        # is by definition the right wall, so this is safe.
         if not a_ok:
             return b, 0.0
 
@@ -368,12 +389,25 @@ class WallNavNode(Node):
         return D_ahead, alpha
 
     def scan_callback(self, msg: LaserScan):
+        # Raw-geometry sanity check BEFORE dilation. Once dilation pulls
+        # a through-glass diagonal back toward neighbour wall returns,
+        # the a/b ratio looks plausible and this signal is gone — so we
+        # check the un-touched scan first and pass the result through.
+        diagonal_invalid = self._diagonal_geometrically_invalid(msg)
+
         # Pre-process: morphological min-dilation. Closes narrow gaps
         # and suppresses through-glass reads before any ray sampling.
         msg.ranges = self._dilate_scan_ranges(msg)
 
-        D_ahead, alpha = self._right_wall_state(msg)
+        D_ahead, alpha = self._right_wall_state(
+            msg, force_diagonal_invalid=diagonal_invalid
+        )
         fwd = self._forward_distance(msg)
+
+        if diagonal_invalid:
+            self.get_logger().info(
+                "diagonal rejected by raw a/b sanity check — perp-only this scan"
+            )
 
         v_min = self.get_parameter("min_forward_speed").value
         bias = self.get_parameter("steering_bias").value

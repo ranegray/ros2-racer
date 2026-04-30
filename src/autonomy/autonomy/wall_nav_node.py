@@ -1,12 +1,15 @@
 """
 wall_nav_node.py
 
-PD wall-following controller. Subscribes to /scan, uses a two-ray
-look-ahead estimator (F1TENTH-style) to compute the car's angle relative
-to the right-hand wall and a projected distance a short look-ahead in
-front, then drives a Twist on /cmd_vel that holds the car a fixed
-distance from that wall. Also subscribes to imu/gyro and uses the
-measured yaw rate as an additional damping term on the steering output.
+PD wall-following controller. Subscribes to /scan, applies a
+morphological min-dilation to the ranges (closes narrow gaps, pulls
+through-glass spuriously-far reads back toward nearby wall returns),
+then uses a two-ray look-ahead estimator (F1TENTH-style) to compute
+the car's angle relative to the right-hand wall and a projected
+distance a short look-ahead in front, then drives a Twist on /cmd_vel
+that holds the car a fixed distance from that wall. Also subscribes
+to imu/gyro and uses the measured yaw rate as an additional damping
+term on the steering output.
 
 Right-turn handling: the right wall vanishing (D_ahead > max_plausible
 or estimator NaN) IS the corner signal. Doorways/windows lose the wall
@@ -190,6 +193,15 @@ class WallNavNode(Node):
         # oppose current rotation — works alongside kd (error derivative)
         # and k_alpha (wall-angle feedback).
         self.declare_parameter("k_yaw", 0.15)
+        # Morphological min-dilation half-window applied to the scan
+        # before any of the ray sampling. For each ray, the output range
+        # is the MIN valid range within ±N° of that ray. Closes narrow
+        # NaN gaps and pulls bogus through-glass reads back toward the
+        # closer wall reading from a few degrees away. Set to 0.0 to
+        # disable. 15° was sized for ~2.5ft (0.76m) windows at the
+        # 0.8m setpoint — large enough to catch wall edges adjacent to
+        # the window when the diagonal beam punches through.
+        self.declare_parameter("scan_dilation_deg", 15.0)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -218,6 +230,50 @@ class WallNavNode(Node):
     def _wrap(angle):
         """Wrap an angle to (-pi, pi]."""
         return math.atan2(math.sin(angle), math.cos(angle))
+
+    def _dilate_scan_ranges(self, msg: LaserScan):
+        """Morphological min-dilation of `msg.ranges` over a ±N° window.
+
+        For each ray, the output is the MIN valid range within
+        ±`scan_dilation_deg` of that ray's angle. Two effects relevant
+        to wall-following:
+          - Narrow NaN gaps (windows, doorways narrower than ~2*N°)
+            get filled by the closest wall reading on either side.
+          - A ray that punches through glass and returns a far value
+            gets pulled back toward the wall reading a few degrees
+            away — the diagonal beam stops "falling for" windows.
+        Returns a Python list of the same length as msg.ranges.
+        """
+        dilation_deg = self.get_parameter("scan_dilation_deg").value
+        if dilation_deg <= 0.0:
+            return list(msg.ranges)
+
+        n = len(msg.ranges)
+        if n == 0 or msg.angle_increment <= 0.0:
+            return list(msg.ranges)
+
+        half = max(1, int(round(math.radians(dilation_deg) / msg.angle_increment)))
+
+        # Mark invalid rays as +inf so they don't pollute the min and
+        # don't accidentally win it. NaN/out-of-range/inf all map to inf.
+        valid = [
+            r if (math.isfinite(r) and msg.range_min <= r <= msg.range_max)
+            else float("inf")
+            for r in msg.ranges
+        ]
+
+        out = [0.0] * n
+        for i in range(n):
+            lo = max(0, i - half)
+            hi = min(n, i + half + 1)
+            m = float("inf")
+            for j in range(lo, hi):
+                if valid[j] < m:
+                    m = valid[j]
+            # If no valid neighbour in window, restore NaN so downstream
+            # validity checks (range_min/max bounds) still reject it.
+            out[i] = m if math.isfinite(m) else float("nan")
+        return out
 
     def _ray_at_angle(
         self, msg: LaserScan, target_angle: float, half_window: float
@@ -294,6 +350,10 @@ class WallNavNode(Node):
         return D_ahead, alpha
 
     def scan_callback(self, msg: LaserScan):
+        # Pre-process: morphological min-dilation. Closes narrow gaps
+        # and suppresses through-glass reads before any ray sampling.
+        msg.ranges = self._dilate_scan_ranges(msg)
+
         D_ahead, alpha = self._right_wall_state(msg)
         fwd = self._forward_distance(msg)
 

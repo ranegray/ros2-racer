@@ -239,10 +239,6 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_kp", 0.3)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
-        self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
-        self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit
-        self.declare_parameter("avoid_crash_close_dist", 1.5)     # m -- allow left escape
-        self.declare_parameter("avoid_crash_left_max", 1.0)       # max left steer
         self.declare_parameter("avoid_max_speed", 0.4)            # m/s cap during any avoid
 
     def _setup_publishers(self):
@@ -446,14 +442,14 @@ class WallNavNode(Node):
         # --- Front crash avoidance -----------------------------------------------
         # Two diagonal rays at +/-front_avoid_deg measure wall angle:
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right
-        #   asymmetry < 0                       ->  wall like /  ->  steer left (close)
-        #   |asymmetry| small                   ->  flat wall    ->  full-lock right
-        # Confirm counter debounces single-scan reflections. Gap filter skips
-        # avoid when a diagonal reads much farther than center (doorway/window).
+        #   asymmetry < 0                       ->  wall like /  ->  steer left
+        #   |asymmetry| small                   ->  flat wall    ->  ignore (below min_asym)
+        # Gap path fires early (gap_detect_thresh) when one diagonal reads
+        # significantly farther than fwd -- the open side IS the gap, steer into it.
+        # Wall avoid path fires at front_avoid_thresh for non-gap walls.
         front_avoid_slow_thresh = self.get_parameter("front_avoid_slow_thresh").value
         front_avoid_thresh = self.get_parameter("front_avoid_thresh").value
         avoid_confirm_scans = self.get_parameter("avoid_confirm_scans").value
-        avoid_crash_close = self.get_parameter("avoid_crash_close_dist").value
         avoid_max_speed = self.get_parameter("avoid_max_speed").value
 
         # Stage 1: compute a speed cap that ramps from v_max down to
@@ -469,7 +465,6 @@ class WallNavNode(Node):
         gap_detect_thresh = self.get_parameter("gap_detect_thresh").value
         gap_diag_mult = self.get_parameter("gap_diag_mult").value
         gap_confirm_scans = self.get_parameter("gap_confirm_scans").value
-        outer_thresh = max(gap_detect_thresh, front_avoid_thresh)
         diag_half = math.radians(5.0)
         front_avoid_deg_r = math.radians(self.get_parameter("front_avoid_deg").value)
         front_L = self._ray_at_angle(msg, +front_avoid_deg_r, diag_half)

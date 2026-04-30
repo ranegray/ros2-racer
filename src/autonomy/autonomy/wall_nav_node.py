@@ -227,7 +227,8 @@ class WallNavNode(Node):
         #   |asymmetry| < front_avoid_min_asym  ->  flat wall    ->  full-lock right
         # A gap filter skips avoid when a diagonal reads much farther than the
         # forward distance (doorway/window beside us), unless we are very close.
-        self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start checking
+        self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
+        self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
@@ -444,9 +445,20 @@ class WallNavNode(Node):
         #   |asymmetry| small                   ->  flat wall    ->  full-lock right
         # Confirm counter debounces single-scan reflections. Gap filter skips
         # avoid when a diagonal reads much farther than center (doorway/window).
+        front_avoid_slow_thresh = self.get_parameter("front_avoid_slow_thresh").value
         front_avoid_thresh = self.get_parameter("front_avoid_thresh").value
         avoid_confirm_scans = self.get_parameter("avoid_confirm_scans").value
         avoid_crash_close = self.get_parameter("avoid_crash_close_dist").value
+        avoid_max_speed = self.get_parameter("avoid_max_speed").value
+
+        # Stage 1: compute a speed cap that ramps from v_max down to
+        # avoid_max_speed as fwd closes from slow_thresh to avoid_thresh.
+        # The PD section uses this cap so steering still runs normally.
+        if math.isfinite(fwd) and fwd < front_avoid_slow_thresh:
+            t = max(0.0, (fwd - front_avoid_thresh) / (front_avoid_slow_thresh - front_avoid_thresh))
+            _approach_speed_cap = avoid_max_speed + t * (v_max - avoid_max_speed)
+        else:
+            _approach_speed_cap = v_max
 
         if fwd < front_avoid_thresh:
             self._avoid_confirm += 1
@@ -722,7 +734,7 @@ class WallNavNode(Node):
 
         # Ease off the throttle when the wall is swinging away (corner/jut).
         speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)
-        forward_speed = max(v_min, v_max * speed_scale)
+        forward_speed = max(v_min, min(_approach_speed_cap, v_max * speed_scale))
 
         drive_cmd = Twist()
         drive_cmd.linear.x = float(forward_speed)

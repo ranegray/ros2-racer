@@ -489,14 +489,14 @@ class WallNavNode(Node):
                 avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / front_avoid_thresh)))
                 asymmetry = front_R - front_L
 
+                raw_d_asym = asymmetry - self._prev_asymmetry
+                d_asym = (
+                    avoid_d_alpha * raw_d_asym
+                    + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
+                )
+                self._prev_d_asymmetry = d_asym
+                self._prev_asymmetry = asymmetry
                 if abs(asymmetry) > min_asym:
-                    raw_d_asym = asymmetry - self._prev_asymmetry
-                    d_asym = (
-                        avoid_d_alpha * raw_d_asym
-                        + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
-                    )
-                    self._prev_d_asymmetry = d_asym
-                    self._prev_asymmetry = asymmetry
                     avoid_steer = (
                         avoid_kp * asymmetry * (1.0 + proximity)
                         - avoid_kd * d_asym
@@ -510,17 +510,6 @@ class WallNavNode(Node):
                     self.get_logger().info(
                         f"AVOID fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
                         f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
-                    )
-                    return
-                else:
-                    self._prev_asymmetry = asymmetry
-                    cmd = Twist()
-                    cmd.linear.x = float(avoid_speed)
-                    cmd.angular.z = float(max_steer_v + bias)
-                    self.cmd_pub.publish(cmd)
-                    self.get_logger().info(
-                        f"SOLID WALL fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
-                        f"turning right"
                     )
                     return
 

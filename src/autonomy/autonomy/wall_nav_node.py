@@ -328,18 +328,35 @@ class WallNavNode(Node):
         return nearest
 
     def _diagonal_geometrically_invalid(self, msg: LaserScan) -> bool:
-        """Pre-dilation sanity check: did the diagonal beam read so much
-        farther than the perpendicular that real wall geometry can't
-        explain it? Through-glass returns produce a/b ratios well above
-        what any real wall slope can reach — this catches them before
-        the dilation smooths the signal away."""
+        """Pre-dilation sanity check on raw beam values. Two failure
+        modes both indicate through-glass / sensor-blind diagonal:
+
+          (1) Raw diagonal is NaN while raw perp is fine. The diagonal
+              saw nothing (most common through-glass signature). The
+              dilation will fabricate a finite value from neighbours,
+              which then drives α-feedback off fictional geometry.
+
+          (2) Raw a/b ratio above threshold. The diagonal sees a real
+              return but it's far beyond what wall geometry from the
+              perp beam can explain — also through-glass / open space
+              behind the wall, just with a finite reading instead of
+              NaN.
+
+        Either case: don't trust the diagonal this scan, fall back to
+        perp-only with α=0.
+        """
         ray_a_deg = self.get_parameter("ray_a_deg").value
         ray_b_deg = self.get_parameter("ray_b_deg").value
         half = math.radians(self.get_parameter("ray_half_window_deg").value)
         a_raw = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
         b_raw = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-        if not math.isfinite(a_raw) or not math.isfinite(b_raw) or b_raw < 0.1:
+        # Need a valid perp reading to make any geometric claim about a.
+        if not math.isfinite(b_raw) or b_raw < 0.1:
             return False
+        # Case (1): raw diagonal NaN, perp fine — through-glass.
+        if not math.isfinite(a_raw):
+            return True
+        # Case (2): raw diagonal finite but absurdly far for the perp.
         ratio = self.get_parameter("diagonal_max_ab_ratio").value
         return a_raw > ratio * b_raw
 
@@ -406,7 +423,7 @@ class WallNavNode(Node):
 
         if diagonal_invalid:
             self.get_logger().info(
-                "diagonal rejected by raw a/b sanity check — perp-only this scan"
+                "diagonal rejected (raw NaN or a/b too high) — perp-only this scan"
             )
 
         v_min = self.get_parameter("min_forward_speed").value

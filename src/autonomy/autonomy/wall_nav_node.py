@@ -231,9 +231,9 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
-        self.declare_parameter("gap_detect_thresh", 3.0)          # m -- start gap threading (earlier)
+        self.declare_parameter("gap_detect_thresh", 2.5)          # m -- start gap threading (earlier)
         self.declare_parameter("gap_diag_mult", 2.0)              # diagonal > N*fwd = gap
-        self.declare_parameter("gap_confirm_scans", 2)            # scans to confirm gap
+        self.declare_parameter("gap_confirm_scans", 4)            # scans to confirm gap
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
         self.declare_parameter("front_avoid_kp", 0.3)

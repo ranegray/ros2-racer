@@ -253,10 +253,12 @@ class WallFollowerNode(Node):
         if self._last_scan_time > 0 and (now - self._last_scan_time) > SCAN_TIMEOUT_S:
             if not self._watchdog_stopped:
                 self._watchdog_stopped = True
-                self._watchdog_recovery = 0
                 self.get_logger().warn(
                     f"No scan for {now - self._last_scan_time:.1f}s — stopping rover"
                 )
+            # Reset every tick (not just on first stop) so a flapping stream
+            # cannot clear the latch with non-consecutive scans across timeouts.
+            self._watchdog_recovery = 0
             self._cmd_pub.publish(Twist())  # hold zero each tick while stopped
 
     # ------------------------------------------------------------------
@@ -495,6 +497,7 @@ class WallFollowerNode(Node):
         # SPIKE_CLUSTER_SCANS samples, accept the new geometry.
         if is_spike and math.isfinite(D_ahead):
             self._spike_cluster.append((D_ahead, alpha))
+            self._spike_cluster = self._spike_cluster[-SPIKE_CLUSTER_SCANS:]
             if len(self._spike_cluster) >= SPIKE_CLUSTER_SCANS:
                 window = self._spike_cluster[-SPIKE_CLUSTER_SCANS:]
                 Ds = [d for d, _ in window]

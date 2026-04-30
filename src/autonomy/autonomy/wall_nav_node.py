@@ -489,6 +489,11 @@ class WallNavNode(Node):
                 avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / front_avoid_thresh)))
                 asymmetry = front_R - front_L
 
+                # Clamp asymmetry before gains — when one diagonal is open
+                # space (substituted with range_max), raw asymmetry can be
+                # 7+ m and blow up the steer command. Cap at ±2m so the
+                # gains stay in a sensible range regardless of corridor width.
+                asymmetry = max(-2.0, min(2.0, asymmetry))
                 raw_d_asym = asymmetry - self._prev_asymmetry
                 d_asym = (
                     avoid_d_alpha * raw_d_asym
@@ -501,7 +506,7 @@ class WallNavNode(Node):
                         avoid_kp * asymmetry * (1.0 + proximity)
                         - avoid_kd * d_asym
                     )
-                    avoid_steer = min(max_steer_v, avoid_steer)
+                    avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
                     avoid_steer += bias
                     cmd = Twist()
                     cmd.linear.x = float(avoid_speed)

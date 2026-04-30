@@ -92,7 +92,7 @@ class WallNavNode(Node):
         # on straights AND helps drive turn-in as the wall starts bending
         # away through a corner. Final command:
         # sign * (kp*err + kd*dE - k_alpha*alpha).
-        self.declare_parameter("k_alpha", 0.5)
+        self.declare_parameter("k_alpha", 2.0)
         # Clip |alpha| used in the steering equation. With k_alpha=2.0, an
         # uncapped alpha=35 degrees (typical for a diagonal beam reading through a
         # window) contributes -1.22 rad/s to steering -- 60% of full lock

@@ -151,7 +151,7 @@ def generate_launch_description():
                 executable="wall_nav_node",
                 name="wall_nav_node",
                 output="screen",
-                parameters=[{"forward_speed": 1.00}],
+                parameters=[{"forward_speed": 1.80}],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(

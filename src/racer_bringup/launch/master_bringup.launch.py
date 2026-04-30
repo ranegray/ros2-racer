@@ -188,7 +188,7 @@ def generate_launch_description():
         name='wall_nav_node',
         output='screen',
         condition=IfCondition(enable_lidar),
-        parameters=[{'forward_speed': 1.0}],
+        parameters=[{'forward_speed': 1.8}],
     )
 
     # ── 6. Telemetry Aggregator ──────────────────────────────────────────────

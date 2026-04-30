@@ -458,6 +458,9 @@ class WallFollowerNode(Node):
                             f"SOLID WALL ctr={center_dist:.2f}m  "
                             f"L={front_L:.2f} R={front_R:.2f}  turning right"
                         )
+                    # Force a clean PD restart on AVOID exit so dt isn't huge
+                    # and prev_error isn't stale from before the avoidance.
+                    self._prev_time = None
                     return
 
         # --- Spike detector ---
@@ -537,8 +540,11 @@ class WallFollowerNode(Node):
                 self._both_lost_since = now_s
             lost_for = now_s - self._both_lost_since
 
-            self._prev_error = self._prev_d_error = 0.0
-            self._prev_time = now_s
+            # Force a clean PD restart on exit. Setting prev_time to None makes
+            # the next normal scan take the d_error=0 branch instead of computing
+            # (current_error - 0) / small_dt, which produced a spurious derivative
+            # kick on every corner exit when these were zeroed instead.
+            self._prev_time = None
 
             cmd = Twist()
             cmd.linear.x = TURN_SPEED
@@ -612,6 +618,9 @@ class WallFollowerNode(Node):
                     f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
                     f"n={self._right_open_count}  left={left_dist:.2f}  steer={steer:.2f}"
                 )
+            # Force a clean PD restart on RIGHT-GONE exit (prev_error from before
+            # the wall vanished is disjoint from post-recovery error).
+            self._prev_time = None
             return
 
         # ==============================================================
@@ -626,6 +635,8 @@ class WallFollowerNode(Node):
             cmd.angular.z = steer
             self._publish(cmd)
             self.get_logger().info(f"RIGHT CRASH  D={D_ahead:.2f}m  steer={steer:+.2f}")
+            # Force a clean PD restart on crash-override exit.
+            self._prev_time = None
             return
 
         error = TARGET_DIST - D_ahead

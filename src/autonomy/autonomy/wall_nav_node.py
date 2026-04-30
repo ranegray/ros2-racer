@@ -105,6 +105,17 @@ class WallNavNode(Node):
         # diagonal back toward neighbour wall returns, the ratio looks
         # plausible and this signal is gone.
         self.declare_parameter("diagonal_max_ab_ratio", 4.0)
+        # Fabrication check: raw diagonal NaN (lidar saw nothing through
+        # glass), but dilation MIN-fills a finite value from neighbours
+        # within ±scan_dilation_deg. If that fabricated value would
+        # produce α with a/b ratio above this threshold, reject — the
+        # wall geometry doesn't actually exist there. Threshold 2.5
+        # corresponds to α ≈ 24°, which catches windows where dilation
+        # produces moderate-α fabrications (the "window of doom" mode).
+        # Routine lap operation is unaffected: when dilation fills a
+        # NaN with low-α geometry (a/b ≲ 2), controller relies on it
+        # for normal wall-following and the check stays quiet.
+        self.declare_parameter("fabrication_max_ab_ratio", 2.5)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
@@ -154,7 +165,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.25)
+        self.declare_parameter("min_forward_speed", 0.5)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
@@ -327,21 +338,47 @@ class WallNavNode(Node):
                     nearest = r
         return nearest
 
-    def _diagonal_geometrically_invalid(self, msg: LaserScan) -> bool:
-        """Pre-dilation sanity check: did the diagonal beam read so much
-        farther than the perpendicular that real wall geometry can't
-        explain it? Through-glass returns produce a/b ratios well above
-        what any real wall slope can reach — this catches them before
-        the dilation smooths the signal away."""
+    def _diagonal_geometrically_invalid(
+        self, raw_msg: LaserScan, dilated_a: float, b_raw: float
+    ) -> bool:
+        """Two checks against trusting the diagonal beam:
+
+          (1) Fabrication: raw diagonal NaN, but dilation MIN-filled a
+              finite value from neighbours. If the fabricated value would
+              produce α with a/b ratio above `fabrication_max_ab_ratio`,
+              reject. This is the "window of doom" mode — lidar saw
+              nothing, dilation invented geometry, F1TENTH formula
+              produced bogus α from invented geometry, α-feedback drove
+              the car into the wall.
+
+          (2) Raw a/b too far: even with a finite raw return, the
+              diagonal can read way farther than the perp can explain
+              — pure through-glass with a finite reading. Caught
+              by `diagonal_max_ab_ratio`.
+
+        Routine NaN-fills (where dilation produces low-α geometry the
+        controller relies on for normal wall-following) pass through
+        both checks unchanged.
+        """
         ray_a_deg = self.get_parameter("ray_a_deg").value
-        ray_b_deg = self.get_parameter("ray_b_deg").value
         half = math.radians(self.get_parameter("ray_half_window_deg").value)
-        a_raw = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
-        b_raw = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-        if not math.isfinite(a_raw) or not math.isfinite(b_raw) or b_raw < 0.1:
+        a_raw = self._ray_at_angle(raw_msg, math.radians(ray_a_deg), half)
+
+        if not math.isfinite(b_raw) or b_raw < 0.1:
             return False
-        ratio = self.get_parameter("diagonal_max_ab_ratio").value
-        return a_raw > ratio * b_raw
+
+        # (1) Fabrication: raw NaN, dilated finite, fabricated a/b high.
+        if not math.isfinite(a_raw) and math.isfinite(dilated_a):
+            fab_ratio = self.get_parameter("fabrication_max_ab_ratio").value
+            if dilated_a > fab_ratio * b_raw:
+                return True
+
+        # (2) Raw finite-but-far.
+        if math.isfinite(a_raw):
+            ratio = self.get_parameter("diagonal_max_ab_ratio").value
+            return a_raw > ratio * b_raw
+
+        return False
 
     def _right_wall_state(self, msg: LaserScan, force_diagonal_invalid: bool = False):
         """
@@ -389,15 +426,37 @@ class WallNavNode(Node):
         return D_ahead, alpha
 
     def scan_callback(self, msg: LaserScan):
-        # Raw-geometry sanity check BEFORE dilation. Once dilation pulls
-        # a through-glass diagonal back toward neighbour wall returns,
-        # the a/b ratio looks plausible and this signal is gone — so we
-        # check the un-touched scan first and pass the result through.
-        diagonal_invalid = self._diagonal_geometrically_invalid(msg)
+        # Save raw ranges so the geometric sanity check can see what the
+        # lidar actually returned (NaN where the beam saw nothing) before
+        # the dilation MIN-fills NaN slots from neighbouring rays.
+        ray_b_deg = self.get_parameter("ray_b_deg").value
+        half = math.radians(self.get_parameter("ray_half_window_deg").value)
+        b_raw = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
+
+        # Raw msg captured for the sanity check.
+        raw_msg_ranges = msg.ranges
 
         # Pre-process: morphological min-dilation. Closes narrow gaps
         # and suppresses through-glass reads before any ray sampling.
         msg.ranges = self._dilate_scan_ranges(msg)
+
+        # Sample the dilated diagonal so the sanity check can detect
+        # fabrication (raw NaN → dilated finite with high implied α).
+        ray_a_deg = self.get_parameter("ray_a_deg").value
+        a_dilated = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
+
+        # Wrap raw ranges in a temp accessor for the sanity check.
+        # We pass the raw msg explicitly so it samples un-dilated rays.
+        raw_msg = type(msg)()
+        raw_msg.ranges = raw_msg_ranges
+        raw_msg.angle_min = msg.angle_min
+        raw_msg.angle_increment = msg.angle_increment
+        raw_msg.range_min = msg.range_min
+        raw_msg.range_max = msg.range_max
+
+        diagonal_invalid = self._diagonal_geometrically_invalid(
+            raw_msg, a_dilated, b_raw
+        )
 
         D_ahead, alpha = self._right_wall_state(
             msg, force_diagonal_invalid=diagonal_invalid
@@ -406,7 +465,7 @@ class WallNavNode(Node):
 
         if diagonal_invalid:
             self.get_logger().info(
-                "diagonal rejected by raw a/b sanity check — perp-only this scan"
+                "diagonal rejected (fabrication or raw a/b too high) — perp-only"
             )
 
         v_min = self.get_parameter("min_forward_speed").value

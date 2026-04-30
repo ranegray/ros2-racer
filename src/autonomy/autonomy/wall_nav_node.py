@@ -80,7 +80,6 @@ class WallNavNode(Node):
         self._prev_asymmetry = 0.0
         self._prev_d_asymmetry = 0.0
         self._avoid_confirm = 0
-        self._gap_confirm = 0
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
@@ -231,10 +230,7 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
-        self.declare_parameter("gap_detect_thresh", 3.0)          # m -- start gap threading (earlier)
-        self.declare_parameter("gap_diag_mult", 1.5)              # diagonal > N*fwd = gap
-        self.declare_parameter("gap_confirm_scans", 4)            # scans to confirm gap
-        self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
+self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
         self.declare_parameter("front_avoid_kp", 0.3)
         self.declare_parameter("front_avoid_kd", 2.8)
@@ -467,38 +463,22 @@ class WallNavNode(Node):
         front_L = front_L if math.isfinite(front_L) else range_max
         front_R = front_R if math.isfinite(front_R) else range_max
 
-        gap_detect_thresh = self.get_parameter("gap_detect_thresh").value
-        gap_diag_mult = self.get_parameter("gap_diag_mult").value
-        gap_confirm_scans = self.get_parameter("gap_confirm_scans").value
-
-        is_gap = math.isfinite(fwd) and (
-            front_L > fwd * gap_diag_mult or front_R > fwd * gap_diag_mult
-        )
-
-        if is_gap and fwd < gap_detect_thresh:
-            self._gap_confirm += 1
-        else:
-            self._gap_confirm = 0
-
-        if not is_gap and math.isfinite(fwd) and fwd < front_avoid_thresh:
-            self._avoid_confirm += 1
-        else:
+        if not math.isfinite(fwd) or fwd >= front_avoid_thresh:
             self._avoid_confirm = 0
+        else:
+            self._avoid_confirm += 1
 
-        fire_gap = self._gap_confirm >= gap_confirm_scans and fwd < gap_detect_thresh and is_gap
         fire_avoid = self._avoid_confirm >= avoid_confirm_scans and math.isfinite(fwd) and fwd < front_avoid_thresh
 
-        if fire_gap or fire_avoid:
+        if fire_avoid:
             avoid_kp = self.get_parameter("front_avoid_kp").value
             avoid_kd = self.get_parameter("front_avoid_kd").value
             avoid_d_alpha = self.get_parameter("front_avoid_d_alpha").value
             min_asym = self.get_parameter("front_avoid_min_asym").value
             max_steer_v = self.get_parameter("max_steering").value
-            active_thresh = gap_detect_thresh if fire_gap else front_avoid_thresh
-            proximity = max(0.0, 1.0 - fwd / active_thresh)
-            avoid_speed = min(avoid_max_speed, max(v_min, v_max * (fwd / active_thresh)))
-            # front_L - front_R: gap on RIGHT → negative → sign*negative = positive angular.z → RIGHT ✓
-            #                    gap on LEFT  → positive → sign*positive = negative angular.z → LEFT  ✓
+            proximity = max(0.0, 1.0 - fwd / front_avoid_thresh)
+            avoid_speed = min(avoid_max_speed, max(v_min, v_max * (fwd / front_avoid_thresh)))
+            # front_L - front_R: more room on RIGHT → negative → sign*negative = positive angular.z → steer RIGHT ✓
             asymmetry = front_L - front_R
 
             # Clamp asymmetry before gains -- when one diagonal is open
@@ -520,14 +500,13 @@ class WallNavNode(Node):
                 )
                 avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
                 avoid_steer = sign * avoid_steer + bias
-                self._gap_confirm = gap_confirm_scans if fire_gap else 0
                 self._avoid_confirm = 0
                 cmd = Twist()
                 cmd.linear.x = float(avoid_speed)
                 cmd.angular.z = float(avoid_steer)
                 self.cmd_pub.publish(cmd)
                 self.get_logger().info(
-                    f"{'GAP' if fire_gap else 'AVOID'} fwd={fwd:.2f}m "
+                    f"AVOID fwd={fwd:.2f}m "
                     f"L={front_L:.2f} R={front_R:.2f} "
                     f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
                 )

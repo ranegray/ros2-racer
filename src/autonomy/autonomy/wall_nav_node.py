@@ -2,27 +2,35 @@
 wall_nav_node.py
 
 PD wall-following controller. Subscribes to /scan, applies a
-morphological min-dilation to the ranges (closes narrow gaps, pulls
-through-glass spuriously-far reads back toward nearby wall returns),
-then uses a two-ray look-ahead estimator (F1TENTH-style) to compute
-the car's angle relative to the right-hand wall and a projected
-distance a short look-ahead in front, then drives a Twist on /cmd_vel
-that holds the car a fixed distance from that wall. Also subscribes
-to imu/gyro and uses the measured yaw rate as an additional damping
-term on the steering output.
+morphological min-dilation to the ranges (closes narrow gaps for the
+forward emergency-stop sweep), then fits a line by total least squares
+to lidar returns in a right-side angular fan and uses the fitted line's
+angle and perpendicular distance (projected a short look-ahead in
+front) to drive a Twist on /cmd_vel that holds the car a fixed distance
+from that wall. Also subscribes to imu/gyro and uses the measured yaw
+rate as an additional damping term on the steering output.
 
-Right-turn handling: the right wall vanishing (D_ahead > max_plausible
-or estimator NaN) IS the corner signal. Doorways/windows lose the wall
-briefly; real corners lose it permanently. So we coast straight for
-`lost_coast_s` (clears short gaps without committing), then execute a
-fixed-duration ~90° right turn (`commit_turn_s` at full lock), then
-release back to PD. The phase clock resets on any good scan, so a
-flickery wall (windows, mesh, partial occluders) keeps us in coast
-instead of crossing into the turn phase on cumulative-lost time. If
-the wall is still missing the next scan, a fresh coast→turn cycle
-starts automatically. After `max_lost_time_s` of continuous loss the
-car idles (zero velocity) until the wall returns — prevents endless
-spinning in open spaces.
+Why a side-fan fit and not a forward-diagonal + perpendicular two-ray
+estimator: a forward-diagonal beam can shoot through a window or
+doorway while the perpendicular beam still hits the wall, producing a
+huge spurious α and driving a hard turn into the opening. Keeping the
+fan entirely on the side (well behind the forward-diagonal region)
+removes that failure mode — a window on the side at worst inflates the
+fit residual and trips wall-lost handling rather than masquerading as a
+corner approach.
+
+Right-turn handling: the right wall vanishing (too few points in the
+fan, fit residual too high, or D_ahead > max_plausible) IS the corner
+signal. Doorways/windows lose the wall briefly; real corners lose it
+permanently. So we coast straight for `lost_coast_s` (clears short
+gaps without committing), then execute a fixed-duration ~90° right
+turn (`commit_turn_s` at full lock), then release back to PD. The
+phase clock resets on any good scan, so a flickery wall (windows,
+mesh, partial occluders) keeps us in coast instead of crossing into
+the turn phase on cumulative-lost time. If the wall is still missing
+the next scan, a fresh coast→turn cycle starts automatically. After
+`max_lost_time_s` of continuous loss the car idles (zero velocity)
+until the wall returns — prevents endless spinning in open spaces.
 """
 
 import math
@@ -93,29 +101,6 @@ class WallNavNode(Node):
         # cycle when the perp beam clears the wall — α-feedback is
         # purely for smooth turn-in on gradual curvature.
         self.declare_parameter("max_alpha_deg", 15.0)
-        # Raw a/b sanity check: through-glass returns push the diagonal
-        # beam to >>b·√2 in a way that real geometry rarely does without
-        # the perp beam ALSO losing the wall shortly after. Reject the
-        # diagonal (and α-feedback) when the RAW (pre-dilation) ratio
-        # exceeds this. Real walls give a/b in [√2, ~2.5]; sharp corner
-        # approaches reach a/b≈3 just before the lost cycle takes over;
-        # through-glass routinely hits 5+. Threshold 4.0 catches the
-        # egregious cases without cutting off pre-corner turn-in.
-        # Checked BEFORE dilation — once dilation pulls the bogus
-        # diagonal back toward neighbour wall returns, the ratio looks
-        # plausible and this signal is gone.
-        self.declare_parameter("diagonal_max_ab_ratio", 4.0)
-        # Fabrication check: raw diagonal NaN (lidar saw nothing through
-        # glass), but dilation MIN-fills a finite value from neighbours
-        # within ±scan_dilation_deg. If that fabricated value would
-        # produce α with a/b ratio above this threshold, reject — the
-        # wall geometry doesn't actually exist there. Threshold 2.5
-        # corresponds to α ≈ 24°, which catches windows where dilation
-        # produces moderate-α fabrications (the "window of doom" mode).
-        # Routine lap operation is unaffected: when dilation fills a
-        # NaN with low-α geometry (a/b ≲ 2), controller relies on it
-        # for normal wall-following and the check stays quiet.
-        self.declare_parameter("fabrication_max_ab_ratio", 2.5)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
@@ -151,12 +136,25 @@ class WallNavNode(Node):
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.8)
         self.declare_parameter("forward_speed", 1.20)
-        # Two-ray look-ahead estimator. Angles measured from the car's
-        # forward axis (0°), REP-103 convention: +CCW, so the right wall
-        # sits at negative angles.
-        self.declare_parameter("ray_a_deg", -45.0)  # forward-right beam
-        self.declare_parameter("ray_b_deg", -90.0)  # perpendicular-right beam
-        self.declare_parameter("ray_half_window_deg", 2.0)
+        # Right-side line-fit estimator. Sweep lidar returns in this
+        # angular fan (REP-103: +CCW from car forward, so right side is
+        # negative) and fit a line by 2D total least squares. The fan
+        # deliberately stays clear of the forward-diagonal region (~-45°)
+        # so openings ahead — windows, doorways, recesses — can't pull
+        # the estimator off the side wall. The fit gives both wall angle
+        # (α) and perpendicular distance (D_ahead, projected `look_ahead`
+        # forward) without ever sampling a beam that can shoot past the
+        # wall plane.
+        self.declare_parameter("right_fan_min_deg", -110.0)
+        self.declare_parameter("right_fan_max_deg", -70.0)
+        # Minimum valid lidar returns inside the fan to trust the fit.
+        # Below this, declare wall lost.
+        self.declare_parameter("min_fit_points", 5)
+        # RMS perpendicular distance from points to the fitted line, in
+        # metres. Above this the fan isn't on a single straight wall
+        # (window, jut, corner edge, open space) — declare wall lost
+        # rather than feed PD a bad fit.
+        self.declare_parameter("max_fit_residual_m", 0.10)
         self.declare_parameter("look_ahead", 0.5)
         # Slow the car down as the wall-angle |α| grows (corners, juts).
         # With closed-loop velocity (rover_node use_velocity_feedback=true)
@@ -308,22 +306,6 @@ class WallNavNode(Node):
             out[i] = m if math.isfinite(m) else float("nan")
         return out
 
-    def _ray_at_angle(
-        self, msg: LaserScan, target_angle: float, half_window: float
-    ) -> float:
-        """Mean of valid rays within `half_window` of `target_angle`. NaN if none."""
-        target = self._wrap(target_angle)
-        readings = []
-        for i, r in enumerate(msg.ranges):
-            if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
-                continue
-            angle = self._wrap(msg.angle_min + i * msg.angle_increment)
-            if abs(self._wrap(angle - target)) <= half_window:
-                readings.append(r)
-        if not readings:
-            return float("nan")
-        return sum(readings) / len(readings)
-
     def _forward_distance(self, msg: LaserScan) -> float:
         """Nearest valid range in a forward-facing window (emergency stop only)."""
         half = math.radians(self.get_parameter("forward_half_window_deg").value)
@@ -338,135 +320,86 @@ class WallNavNode(Node):
                     nearest = r
         return nearest
 
-    def _diagonal_geometrically_invalid(
-        self, raw_msg: LaserScan, dilated_a: float, b_raw: float
-    ) -> bool:
-        """Two checks against trusting the diagonal beam:
-
-          (1) Fabrication: raw diagonal NaN, but dilation MIN-filled a
-              finite value from neighbours. If the fabricated value would
-              produce α with a/b ratio above `fabrication_max_ab_ratio`,
-              reject. This is the "window of doom" mode — lidar saw
-              nothing, dilation invented geometry, F1TENTH formula
-              produced bogus α from invented geometry, α-feedback drove
-              the car into the wall.
-
-          (2) Raw a/b too far: even with a finite raw return, the
-              diagonal can read way farther than the perp can explain
-              — pure through-glass with a finite reading. Caught
-              by `diagonal_max_ab_ratio`.
-
-        Routine NaN-fills (where dilation produces low-α geometry the
-        controller relies on for normal wall-following) pass through
-        both checks unchanged.
+    def _right_wall_state(self, msg: LaserScan):
         """
-        ray_a_deg = self.get_parameter("ray_a_deg").value
-        half = math.radians(self.get_parameter("ray_half_window_deg").value)
-        a_raw = self._ray_at_angle(raw_msg, math.radians(ray_a_deg), half)
+        Fit a line by total least squares to lidar returns in the right-
+        side angular fan, and report (D_ahead, α):
+          α       — wall's angle relative to the car's heading
+                    (F1TENTH convention: positive when the wall angles
+                     away ahead, negative when it converges).
+          D_ahead — perpendicular distance from a point `look_ahead`
+                    in front of the car to the fitted wall line.
 
-        if not math.isfinite(b_raw) or b_raw < 0.1:
-            return False
-
-        # (1) Fabrication: raw NaN, dilated finite, fabricated a/b high.
-        if not math.isfinite(a_raw) and math.isfinite(dilated_a):
-            fab_ratio = self.get_parameter("fabrication_max_ab_ratio").value
-            if dilated_a > fab_ratio * b_raw:
-                return True
-
-        # (2) Raw finite-but-far.
-        if math.isfinite(a_raw):
-            ratio = self.get_parameter("diagonal_max_ab_ratio").value
-            return a_raw > ratio * b_raw
-
-        return False
-
-    def _right_wall_state(self, msg: LaserScan, force_diagonal_invalid: bool = False):
+        Returns (NaN, NaN) when the fan has fewer than `min_fit_points`
+        valid returns or the RMS perpendicular fit residual exceeds
+        `max_fit_residual_m` — i.e. the fan isn't on a single straight
+        wall (window, jut, open corner, etc.). NaN flows through to
+        the existing wall-lost handling.
         """
-        Return (D_ahead, alpha):
-          alpha   — car's heading angle relative to the wall (0 = parallel).
-          D_ahead — perpendicular distance to wall a `look_ahead` in front.
-        Falls back to single-beam estimates if the other beam is lost to
-        a doorway, window, jut, or recess. Both NaN only when both beams
-        are missing.
-        """
-        ray_a_deg = self.get_parameter("ray_a_deg").value
-        ray_b_deg = self.get_parameter("ray_b_deg").value
-        half = math.radians(self.get_parameter("ray_half_window_deg").value)
+        fan_min = math.radians(self.get_parameter("right_fan_min_deg").value)
+        fan_max = math.radians(self.get_parameter("right_fan_max_deg").value)
         L = self.get_parameter("look_ahead").value
+        min_pts = self.get_parameter("min_fit_points").value
+        max_resid = self.get_parameter("max_fit_residual_m").value
 
-        a = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
-        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-        a_ok = math.isfinite(a) and not force_diagonal_invalid
-        b_ok = math.isfinite(b)
+        xs, ys = [], []
+        for i, r in enumerate(msg.ranges):
+            if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
+                continue
+            angle = self._wrap(msg.angle_min + i * msg.angle_increment)
+            if fan_min <= angle <= fan_max:
+                xs.append(r * math.cos(angle))
+                ys.append(r * math.sin(angle))
 
-        # Perpendicular (-90°) beam missing: report wall lost. Don't fall
-        # back to the forward-diagonal alone — that beam can be hitting
-        # whatever's in front of the car (wall ahead, far wall of an
-        # intersection) and report it as "right wall", which the PD then
-        # follows into impact. A doorway recessed a few feet still
-        # returns a valid perpendicular reading off the back of the
-        # recess; only true wall-loss (windows, corners, hallway exits)
-        # produces a missing perp beam.
-        if not b_ok:
+        n = len(xs)
+        if n < min_pts:
             return float("nan"), float("nan")
 
-        # Forward-diagonal missing or rejected by raw-geometry sanity
-        # check: perpendicular only, no look-ahead, no α-feedback. `b`
-        # is by definition the right wall, so this is safe.
-        if not a_ok:
-            return b, 0.0
+        x_bar = sum(xs) / n
+        y_bar = sum(ys) / n
+        Sxx = sum((x - x_bar) ** 2 for x in xs)
+        Syy = sum((y - y_bar) ** 2 for y in ys)
+        Sxy = sum((x - x_bar) * (y - y_bar) for x, y in zip(xs, ys))
 
-        # Use the magnitude of the angular gap so the formula works
-        # regardless of which side of forward the rays sit on.
-        theta = abs(math.radians(ray_b_deg - ray_a_deg))
-        # F1TENTH estimator: wall angle, then project current distance forward.
-        alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
-        D_now = b * math.cos(alpha)
-        D_ahead = D_now + L * math.sin(alpha)
+        # Principal axis of the centred covariance — the line direction
+        # that minimises perpendicular residuals. Output is in (-π/2,
+        # π/2], so the direction always has a non-negative x component
+        # (forward-along-the-wall).
+        theta = 0.5 * math.atan2(2 * Sxy, Sxx - Syy)
+        dx, dy = math.cos(theta), math.sin(theta)
+        nx, ny = -dy, dx  # unit normal
+
+        # RMS perpendicular residual. High residual means the fan
+        # straddles non-wall geometry: window, jut, corner edge, open
+        # space. Cheaper than a full eigendecomposition; same result.
+        sq_resid = sum(
+            ((x - x_bar) * nx + (y - y_bar) * ny) ** 2 for x, y in zip(xs, ys)
+        )
+        rms_resid = math.sqrt(sq_resid / n)
+        if rms_resid > max_resid:
+            return float("nan"), float("nan")
+
+        # Perpendicular distance from a point L ahead to the fitted line
+        # (line passes through the centroid with unit normal (nx, ny)).
+        D_ahead = abs(nx * (x_bar - L) + ny * y_bar)
+
+        # Line-fit principal axis runs forward-along-the-wall (dx ≥ 0).
+        # When the wall angles away ahead, dy is negative, so atan2(dy,
+        # dx) = θ is negative — flip the sign to match F1TENTH α
+        # convention (positive = away ahead).
+        alpha = -theta
         return D_ahead, alpha
 
     def scan_callback(self, msg: LaserScan):
-        # Save raw ranges so the geometric sanity check can see what the
-        # lidar actually returned (NaN where the beam saw nothing) before
-        # the dilation MIN-fills NaN slots from neighbouring rays.
-        ray_b_deg = self.get_parameter("ray_b_deg").value
-        half = math.radians(self.get_parameter("ray_half_window_deg").value)
-        b_raw = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-
-        # Raw msg captured for the sanity check.
-        raw_msg_ranges = msg.ranges
-
-        # Pre-process: morphological min-dilation. Closes narrow gaps
-        # and suppresses through-glass reads before any ray sampling.
+        # Pre-process: morphological min-dilation closes narrow NaN
+        # gaps so the forward emergency-stop sweep is more reliable.
+        # The line fit also gets the dilated ranges; outliers and
+        # filled-but-nonexistent geometry are caught by the residual
+        # check inside _right_wall_state.
         msg.ranges = self._dilate_scan_ranges(msg)
 
-        # Sample the dilated diagonal so the sanity check can detect
-        # fabrication (raw NaN → dilated finite with high implied α).
-        ray_a_deg = self.get_parameter("ray_a_deg").value
-        a_dilated = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
-
-        # Wrap raw ranges in a temp accessor for the sanity check.
-        # We pass the raw msg explicitly so it samples un-dilated rays.
-        raw_msg = type(msg)()
-        raw_msg.ranges = raw_msg_ranges
-        raw_msg.angle_min = msg.angle_min
-        raw_msg.angle_increment = msg.angle_increment
-        raw_msg.range_min = msg.range_min
-        raw_msg.range_max = msg.range_max
-
-        diagonal_invalid = self._diagonal_geometrically_invalid(
-            raw_msg, a_dilated, b_raw
-        )
-
-        D_ahead, alpha = self._right_wall_state(
-            msg, force_diagonal_invalid=diagonal_invalid
-        )
+        D_ahead, alpha = self._right_wall_state(msg)
         fwd = self._forward_distance(msg)
-
-        if diagonal_invalid:
-            self.get_logger().info(
-                "diagonal rejected (fabrication or raw a/b too high) — perp-only"
-            )
 
         v_min = self.get_parameter("min_forward_speed").value
         bias = self.get_parameter("steering_bias").value

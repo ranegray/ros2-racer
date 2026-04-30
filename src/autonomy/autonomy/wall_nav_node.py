@@ -182,7 +182,7 @@ class WallNavNode(Node):
         # so flickery walls (windows, mesh) stay in coast indefinitely
         # rather than accumulating cumulative-lost time into the turn
         # phase.
-        self.declare_parameter("lost_coast_s", 0.3)
+        self.declare_parameter("lost_coast_s", 0.4)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
         # Speed during the lost cycle (coast + turn + release). Decoupled
@@ -219,7 +219,7 @@ class WallNavNode(Node):
         # disable. 15 degrees was sized for ~2.5ft (0.76m) windows at the
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
-        self.declare_parameter("scan_dilation_deg", 15.0)
+        self.declare_parameter("scan_dilation_deg", 20.0)
         # Front crash avoidance: two diagonal rays (+/-front_avoid_deg) detect
         # whether the approaching wall is angled or flat.
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right

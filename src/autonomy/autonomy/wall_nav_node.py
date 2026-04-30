@@ -190,7 +190,7 @@ class WallNavNode(Node):
         # from v_min so cruise tuning doesn't change corner geometry.
         # 2s x ~45 deg/s rotation at full lock at ~0.4 m/s gives a clean ~90 degrees.
         # At lower speeds a 2s commit only completes a partial turn.
-        self.declare_parameter("commit_speed", 0.4)
+        self.declare_parameter("commit_speed", 0.6)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common

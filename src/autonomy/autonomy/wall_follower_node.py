@@ -26,7 +26,6 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
 
 # --- Tunable constants -------------------------------------------
 # Right-wall F1TENTH estimator
@@ -96,13 +95,16 @@ class WallFollowerNode(Node):
     def __init__(self):
         super().__init__("wall_follower_node")
 
+        # Timestamp: elapsed seconds since node start
+        self._start_time = self.get_clock().now().nanoseconds * 1e-9
+
         self.declare_parameter("speed_override", -1.0)
         _override = self.get_parameter("speed_override").value
         if _override > 0.0:
             global BASE_SPEED, TURN_SPEED
             BASE_SPEED = _override
             TURN_SPEED = min(TURN_SPEED, _override)
-            self.get_logger().info(
+            self._log_info(
                 f"speed_override active: BASE_SPEED={BASE_SPEED} m/s  TURN_SPEED={TURN_SPEED} m/s"
             )
 
@@ -131,27 +133,32 @@ class WallFollowerNode(Node):
             depth=1,
         )
         self.create_subscription(LaserScan, "/scan_nav", self._scan_cb, _scan_qos)
-        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
-        self._active = True
-
         self._last_scan_time: float = 0.0
         self._watchdog = self.create_timer(0.5, self._watchdog_cb)
 
-        self.get_logger().info("F1TENTH wall follower started")
+        self._log_info("F1TENTH wall follower started")
 
     # --- helpers ------------------------------------------------------
+
+    def _elapsed(self) -> float:
+        """Seconds since node start."""
+        return self.get_clock().now().nanoseconds * 1e-9 - self._start_time
+
+    def _log_info(self, msg: str):
+        self.get_logger().info(f"[t={self._elapsed():.1f}s] {msg}")
+
+    def _log_warn(self, msg: str):
+        self.get_logger().warn(f"[t={self._elapsed():.1f}s] {msg}")
 
     def _publish(self, cmd: Twist):
         cmd.angular.z += STEERING_TRIM
         self._cmd_pub.publish(cmd)
 
     def _watchdog_cb(self):
-        if not self._active:
-            return
         now = self.get_clock().now().nanoseconds * 1e-9
         if self._last_scan_time > 0 and (now - self._last_scan_time) > SCAN_TIMEOUT_S:
             self._cmd_pub.publish(Twist())
-            self.get_logger().warn(
+            self._log_warn(
                 f"No scan for {now - self._last_scan_time:.1f}s — stopping rover"
             )
 
@@ -207,15 +214,7 @@ class WallFollowerNode(Node):
 
     # --- main loop ----------------------------------------------------
 
-    def _mode_cb(self, msg: String):
-        if msg.data in ("saving", "ready", "racing") and self._active:
-            self._active = False
-            self._cmd_pub.publish(Twist())
-            self.get_logger().info(f"Mode → {msg.data.upper()}: wall follower stopping")
-
     def _scan_cb(self, msg: LaserScan):
-        if not self._active:
-            return
         self._last_scan_time = self.get_clock().now().nanoseconds * 1e-9
 
         if not self._idx_cached:
@@ -223,7 +222,7 @@ class WallFollowerNode(Node):
             self._front_idx = self._cone_indices(msg, 0.0, FRONT_CONE_DEG)
             self._center_idx = self._cone_indices(msg, 0.0, CENTER_CONE_DEG)
             self._idx_cached = True
-            self.get_logger().info(
+            self._log_info(
                 f"Cone caches: left={len(self._left_idx)} "
                 f"front={len(self._front_idx)} center={len(self._center_idx)}"
             )
@@ -272,7 +271,7 @@ class WallFollowerNode(Node):
             cmd.linear.x = TURN_SPEED
             cmd.angular.z = steer
             self._publish(cmd)
-            self.get_logger().info(f"RIGHT CRASH  D={D_ahead:.2f}m  steer={steer:+.2f}")
+            self._log_info(f"RIGHT CRASH  D={D_ahead:.2f}m  steer={steer:+.2f}")
             return
 
         error = TARGET_DIST - D_ahead
@@ -302,7 +301,7 @@ class WallFollowerNode(Node):
         self._publish(cmd)
 
         tag = "F1TENTH+bal" if not left_gone else "F1TENTH"
-        self.get_logger().info(
+        self._log_info(
             f"{tag}  D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}°  "
             f"left={left_dist:.2f}  err={error:+.2f}  steer={steering:+.2f}  v={speed:.2f}"
         )
@@ -322,7 +321,7 @@ class WallFollowerNode(Node):
             or front_R > center_dist * FRONT_AVOID_MAX_DIAG_MULT
         )
         if gap and center_dist >= AVOID_CRASH_CLOSE_DIST:
-            self.get_logger().info(
+            self._log_info(
                 f"AVOID SKIP (gap) ctr={center_dist:.2f}m  L={front_L:.2f} R={front_R:.2f}"
             )
             return False
@@ -337,7 +336,7 @@ class WallFollowerNode(Node):
         cmd.linear.x = speed
         cmd.angular.z = steer
         self._publish(cmd)
-        self.get_logger().info(
+        self._log_info(
             f"AVOID ctr={center_dist:.2f}m  L={front_L:.2f} R={front_R:.2f}  "
             f"asym={asymmetry:+.2f}  steer={steer:+.2f}"
         )
@@ -367,7 +366,7 @@ class WallFollowerNode(Node):
             cmd.linear.x = TURN_SPEED
             cmd.angular.z = MAX_STEER
             self._publish(cmd)
-            self.get_logger().info(
+            self._log_info(
                 f"RIGHT GONE+TURN  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
                 f"left_gone={left_gone}  n={self._right_open_count}"
             )
@@ -380,7 +379,7 @@ class WallFollowerNode(Node):
         cmd.linear.x = BASE_SPEED
         cmd.angular.z = steer
         self._publish(cmd)
-        self.get_logger().info(
+        self._log_info(
             f"RIGHT GONE+WAIT  ray_a={ray_a:.2f}m  ctr={center_dist:.2f}m  "
             f"left={left_dist:.2f}  n={self._right_open_count}  steer={steer:.2f}"
         )

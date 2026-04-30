@@ -480,46 +480,45 @@ class WallNavNode(Node):
             front_R = front_R if math.isfinite(front_R) else range_max
 
             avoid_kp = self.get_parameter("front_avoid_kp").value
-                avoid_kd = self.get_parameter("front_avoid_kd").value
-                avoid_d_alpha = self.get_parameter("front_avoid_d_alpha").value
-                min_asym = self.get_parameter("front_avoid_min_asym").value
-                crash_left_max = self.get_parameter("avoid_crash_left_max").value
-                max_steer_v = self.get_parameter("max_steering").value
-                v_max_v = self.get_parameter("forward_speed").value
-                proximity = 1.0 - fwd / front_avoid_thresh
-                avoid_max_speed = self.get_parameter("avoid_max_speed").value
-                avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / front_avoid_thresh)))
-                asymmetry = front_R - front_L
+            avoid_kd = self.get_parameter("front_avoid_kd").value
+            avoid_d_alpha = self.get_parameter("front_avoid_d_alpha").value
+            min_asym = self.get_parameter("front_avoid_min_asym").value
+            max_steer_v = self.get_parameter("max_steering").value
+            v_max_v = self.get_parameter("forward_speed").value
+            proximity = 1.0 - fwd / front_avoid_thresh
+            avoid_max_speed = self.get_parameter("avoid_max_speed").value
+            avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / front_avoid_thresh)))
+            asymmetry = front_R - front_L
 
-                # Clamp asymmetry before gains — when one diagonal is open
-                # space (substituted with range_max), raw asymmetry can be
-                # 7+ m and blow up the steer command. Cap at ±2m so the
-                # gains stay in a sensible range regardless of corridor width.
-                asymmetry = max(-2.0, min(2.0, asymmetry))
-                raw_d_asym = asymmetry - self._prev_asymmetry
-                d_asym = (
-                    avoid_d_alpha * raw_d_asym
-                    + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
+            # Clamp asymmetry before gains -- when one diagonal is open
+            # space (substituted with range_max), raw asymmetry can be
+            # 7+ m and blow up the steer command. Cap at +-2m so the
+            # gains stay in a sensible range regardless of corridor width.
+            asymmetry = max(-2.0, min(2.0, asymmetry))
+            raw_d_asym = asymmetry - self._prev_asymmetry
+            d_asym = (
+                avoid_d_alpha * raw_d_asym
+                + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
+            )
+            self._prev_d_asymmetry = d_asym
+            self._prev_asymmetry = asymmetry
+            if abs(asymmetry) > min_asym:
+                avoid_steer = (
+                    avoid_kp * asymmetry * (1.0 + proximity)
+                    - avoid_kd * d_asym
                 )
-                self._prev_d_asymmetry = d_asym
-                self._prev_asymmetry = asymmetry
-                if abs(asymmetry) > min_asym:
-                    avoid_steer = (
-                        avoid_kp * asymmetry * (1.0 + proximity)
-                        - avoid_kd * d_asym
-                    )
-                    avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
-                    avoid_steer += bias
-                    self._avoid_confirm = 0  # must reconfirm before firing again
-                    cmd = Twist()
-                    cmd.linear.x = float(avoid_speed)
-                    cmd.angular.z = float(avoid_steer)
-                    self.cmd_pub.publish(cmd)
-                    self.get_logger().info(
-                        f"AVOID fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
-                        f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
-                    )
-                    return
+                avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
+                avoid_steer += bias
+                self._avoid_confirm = 0  # must reconfirm before firing again
+                cmd = Twist()
+                cmd.linear.x = float(avoid_speed)
+                cmd.angular.z = float(avoid_steer)
+                self.cmd_pub.publish(cmd)
+                self.get_logger().info(
+                    f"AVOID fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
+                    f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
+                )
+                return
 
         # Spike detector: reject a scan whose (D_ahead, alpha) jumped farther
         # than physically possible from the last valid reading. Prevents

@@ -161,7 +161,7 @@ class WallNavNode(Node):
         self.declare_parameter("steering_sign", -1.0)
         # Constant steering offset (in the *post-sign* frame) to trim a
         # mechanically off-centre servo.
-        self.declare_parameter("steering_bias", 0.2)
+        self.declare_parameter("steering_bias", 0.25)
         # Wall-loss handling. Doorways/windows lose the right wall
         # briefly; right-turn corners lose it for good. Coast straight
         # for `lost_coast_s` to clear short gaps, then commit a fixed-

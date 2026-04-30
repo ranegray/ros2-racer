@@ -538,6 +538,10 @@ class WallFollowerNode(Node):
         if right_gone and left_gone:
             if self._both_lost_since is None:
                 self._both_lost_since = now_s
+                # Entering BOTH-GONE — reset right-hallway counter so a stale
+                # high count from a prior RIGHT-GONE episode can't immediately
+                # commit on the first open_hallway scan after we exit.
+                self._right_open_count = 0
             lost_for = now_s - self._both_lost_since
 
             # Force a clean PD restart on exit. Setting prev_time to None makes

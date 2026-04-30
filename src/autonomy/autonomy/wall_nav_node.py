@@ -231,7 +231,7 @@ class WallNavNode(Node):
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 0.2)
+        self.declare_parameter("front_avoid_kp", 0.3)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
@@ -501,10 +501,7 @@ class WallNavNode(Node):
                         avoid_kp * asymmetry * (1.0 + proximity)
                         - avoid_kd * d_asym
                     )
-                    if fwd < avoid_crash_close:
-                        avoid_steer = max(-crash_left_max, min(max_steer_v, avoid_steer))
-                    else:
-                        avoid_steer = max(0.0, min(max_steer_v, avoid_steer))
+                    avoid_steer = max(-crash_left_max, min(max_steer_v, avoid_steer))
                     avoid_steer += bias
                     cmd = Twist()
                     cmd.linear.x = float(avoid_speed)

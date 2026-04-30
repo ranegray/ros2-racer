@@ -4,15 +4,15 @@ wall_nav_node.py
 PD wall-following controller. Subscribes to /scan, applies a
 morphological min-dilation to the ranges (closes narrow gaps, pulls
 through-glass spuriously-far reads back toward nearby wall returns),
-then uses a two-ray look-ahead estimator (F1TENTH-style) to compute
-the car's angle relative to the right-hand wall and a projected
-distance a short look-ahead in front, then drives a Twist on /cmd_vel
-that holds the car a fixed distance from that wall. Also subscribes
-to imu/gyro and uses the measured yaw rate as an additional damping
-term on the steering output.
+samples a single perpendicular ray on the right side, and drives a
+Twist on /cmd_vel that holds the car a fixed distance from the wall.
+Also subscribes to imu/gyro and uses the measured yaw rate as a
+damping term on the steering output. No diagonal look-ahead beam:
+corner detection happens entirely through the wall-lost cycle when
+the perpendicular beam clears the wall.
 
-Right-turn handling: the right wall vanishing (D_ahead > max_plausible
-or estimator NaN) IS the corner signal. Doorways/windows lose the wall
+Right-turn handling: the right wall vanishing (D > max_plausible
+or perp beam NaN) IS the corner signal. Doorways/windows lose the wall
 briefly; real corners lose it permanently. So we coast straight for
 `lost_coast_s` (clears short gaps without committing), then execute a
 fixed-duration ~90° right turn (`commit_turn_s` at full lock), then
@@ -64,9 +64,8 @@ class WallNavNode(Node):
         # Initialized to the first scan's timestamp so the idle timer has
         # a sensible anchor when we never see the wall.
         self._last_good_time = None
-        # For spike detection: last VALID (D_ahead, alpha) and its timestamp.
+        # For spike detection: last VALID D and its timestamp.
         self._last_valid_D = None
-        self._last_valid_alpha = None
         self._last_valid_time = None
         # Latest IMU yaw rate (rad/s) for yaw-rate damping on the steering.
         self._yaw_rate = 0.0
@@ -78,41 +77,20 @@ class WallNavNode(Node):
         # so ±2 = full lock). Gains are tuned for that, not for rad/s.
         self.declare_parameter("kp", 0.8)
         self.declare_parameter("kd", 0.15)
-        # α-feedback: counteracts the car's yaw toward/away from the wall
-        # on straights AND helps drive turn-in as the wall starts bending
-        # away through a corner. Final command:
-        # sign * (kp·err + kd·dE − k_alpha·α).
-        self.declare_parameter("k_alpha", 2.0)
-        # Clip |α| used in the steering equation. With k_alpha=2.0, an
-        # uncapped α=35° (typical for a diagonal beam reading through a
-        # window) contributes -1.22 rad/s to steering — 60% of full lock
-        # before any other term. Capping at 25° keeps α-feedback's max
-        # contribution to ~0.87, so PD/yaw still have headroom and a
-        # bogus α can't single-handedly slam the steering into the wall.
-        # Real sharp corners are handled by the wall-lost commit, not α.
-        self.declare_parameter("max_alpha_deg", 25.0)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
         # Distance error is clipped to ±max_error before PD. Stops the
         # controller from panic-saturating when the estimator briefly
         # reports an absurd distance (window, long recess, beam glitch).
-        # 1.5 m chosen so the controller has authority to drive ~1+ m
-        # corrections (the old 0.4 cap masked target_distance changes
-        # entirely — every error read as ±0.4 regardless of true gap).
         self.declare_parameter("max_error", 1.5)
         # Anything beyond this is treated as "no wall visible". This is
         # also the right-turn signal: the wall vanishes and stays gone.
         self.declare_parameter("max_plausible_distance", 4.0)
-        # Spike detector: a corner grows D and α smoothly; a window makes
-        # them jump within a single scan. If either delta exceeds its
-        # limit, treat the scan as unreliable so it can't masquerade as
-        # a corner entry.
+        # Spike detector: a corner grows D smoothly; a window makes
+        # it jump within a single scan. If the delta exceeds the
+        # limit, treat the scan as unreliable.
         self.declare_parameter("max_d_jump", 0.8)
-        # 60° tolerates legitimate fast α swings during corner approach
-        # (the spike check otherwise rejects them as glitches and starves
-        # PD/α-feedback of the data it needs to drive the turn-in).
-        self.declare_parameter("max_alpha_jump_deg", 60.0)
         # Drop stored last-valid state if no valid scan arrives within
         # this many seconds, so the next scan doesn't compare against
         # stale history.
@@ -126,22 +104,12 @@ class WallNavNode(Node):
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.8)
         self.declare_parameter("forward_speed", 1.20)
-        # Two-ray look-ahead estimator. Angles measured from the car's
-        # forward axis (0°), REP-103 convention: +CCW, so the right wall
-        # sits at negative angles.
-        self.declare_parameter("ray_a_deg", -45.0)  # forward-right beam
-        self.declare_parameter("ray_b_deg", -90.0)  # perpendicular-right beam
+        # Single perpendicular ray on the right side. Angles measured
+        # from the car's forward axis (0°), REP-103 convention: +CCW,
+        # so the right wall sits at negative angles. The half-window
+        # averages multiple rays in a small arc for noise robustness.
+        self.declare_parameter("ray_b_deg", -90.0)
         self.declare_parameter("ray_half_window_deg", 2.0)
-        self.declare_parameter("look_ahead", 0.5)
-        # Slow the car down as the wall-angle |α| grows (corners, juts).
-        # With closed-loop velocity (rover_node use_velocity_feedback=true)
-        # the open-loop stall floor is gone — the PI loop saturates throttle
-        # to achieve the commanded m/s regardless of magnitude. Set this to
-        # the slowest sustainable corner speed; 0.12 lets corners be taken
-        # very slow without stalling. If you ever revert to open-loop in
-        # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.25)
-        self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
         # Steering-output sign. This rover is wired with inverted steering
@@ -198,8 +166,8 @@ class WallNavNode(Node):
         # Damping gain on measured yaw rate (rad/s) from imu/gyro.z. Applied
         # in the REP-103 control frame (before the steering_sign flip), so
         # a positive yaw rate (CCW / left) subtracts from `steering` to
-        # oppose current rotation — works alongside kd (error derivative)
-        # and k_alpha (wall-angle feedback).
+        # oppose current rotation. With α-feedback removed, this is the
+        # primary heading-correction signal alongside the kd derivative.
         self.declare_parameter("k_yaw", 0.15)
         # Morphological min-dilation half-window applied to the scan
         # before any of the ray sampling. For each ray, the output range
@@ -313,67 +281,20 @@ class WallNavNode(Node):
                     nearest = r
         return nearest
 
-    def _right_wall_state(self, msg: LaserScan):
-        """
-        Return (D_ahead, alpha):
-          alpha   — car's heading angle relative to the wall (0 = parallel).
-          D_ahead — perpendicular distance to wall a `look_ahead` in front.
-        Falls back to single-beam estimates if the other beam is lost to
-        a doorway, window, jut, or recess. Both NaN only when both beams
-        are missing.
-        """
-        ray_a_deg = self.get_parameter("ray_a_deg").value
+    def _right_wall_distance(self, msg: LaserScan) -> float:
+        """Perpendicular distance to the right wall, NaN if no return."""
         ray_b_deg = self.get_parameter("ray_b_deg").value
         half = math.radians(self.get_parameter("ray_half_window_deg").value)
-        L = self.get_parameter("look_ahead").value
-
-        a = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
-        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
-        a_ok = math.isfinite(a)
-        b_ok = math.isfinite(b)
-
-        # Perpendicular (-90°) beam missing: report wall lost. Don't fall
-        # back to the forward-diagonal alone — that beam can be hitting
-        # whatever's in front of the car (wall ahead, far wall of an
-        # intersection) and report it as "right wall", which the PD then
-        # follows into impact. A doorway recessed a few feet still
-        # returns a valid perpendicular reading off the back of the
-        # recess; only true wall-loss (windows, corners, hallway exits)
-        # produces a missing perp beam.
-        if not b_ok:
-            return float("nan"), float("nan")
-
-        # Note: deliberately no geometric sanity check on a/b here.
-        # Real right-corner approach IS "a grows large while b stays
-        # normal" — that's the signal we use for early turn-in via
-        # α-feedback. Rejecting large a/b would suppress the very thing
-        # we need to detect corners. Through-glass false positives are
-        # mitigated upstream (dilation) and downstream (α clip) without
-        # killing the corner signal.
-
-        # Forward-diagonal missing: perpendicular only, no look-ahead.
-        # `b` is by definition the right wall, so this is safe.
-        if not a_ok:
-            return b, 0.0
-
-        # Use the magnitude of the angular gap so the formula works
-        # regardless of which side of forward the rays sit on.
-        theta = abs(math.radians(ray_b_deg - ray_a_deg))
-        # F1TENTH estimator: wall angle, then project current distance forward.
-        alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))
-        D_now = b * math.cos(alpha)
-        D_ahead = D_now + L * math.sin(alpha)
-        return D_ahead, alpha
+        return self._ray_at_angle(msg, math.radians(ray_b_deg), half)
 
     def scan_callback(self, msg: LaserScan):
         # Pre-process: morphological min-dilation. Closes narrow gaps
         # and suppresses through-glass reads before any ray sampling.
         msg.ranges = self._dilate_scan_ranges(msg)
 
-        D_ahead, alpha = self._right_wall_state(msg)
+        D = self._right_wall_distance(msg)
         fwd = self._forward_distance(msg)
 
-        v_min = self.get_parameter("min_forward_speed").value
         bias = self.get_parameter("steering_bias").value
         sign = self.get_parameter("steering_sign").value
         max_plausible = self.get_parameter("max_plausible_distance").value
@@ -396,33 +317,28 @@ class WallNavNode(Node):
             self.cmd_pub.publish(Twist())
             return
 
-        # Spike detector: reject a scan whose (D_ahead, α) jumped farther
-        # than physically possible from the last valid reading. Prevents
-        # a window from masquerading as a corner entry.
+        # Spike detector: reject a scan whose D jumped farther than
+        # physically possible from the last valid reading. Prevents a
+        # window glint from masquerading as a corner entry.
         stale_s = self.get_parameter("spike_stale_s").value
         max_d_jump = self.get_parameter("max_d_jump").value
-        max_alpha_jump = math.radians(self.get_parameter("max_alpha_jump_deg").value)
         is_spike = False
         if (
-            math.isfinite(D_ahead)
+            math.isfinite(D)
             and self._last_valid_time is not None
             and (now - self._last_valid_time) < stale_s
         ):
-            dD = abs(D_ahead - self._last_valid_D)
-            da = abs(alpha - self._last_valid_alpha)
-            if dD > max_d_jump or da > max_alpha_jump:
+            dD = abs(D - self._last_valid_D)
+            if dD > max_d_jump:
                 is_spike = True
-                self.get_logger().info(
-                    f"spike rejected: ΔD={dD:.2f}m Δα={math.degrees(da):+.1f}°"
-                )
+                self.get_logger().info(f"spike rejected: ΔD={dD:.2f}m")
         # Invalidate stale history so we don't compare the next valid
-        # scan against an outdated (D, α).
+        # scan against an outdated D.
         if (
             self._last_valid_time is not None
             and (now - self._last_valid_time) >= stale_s
         ):
             self._last_valid_D = None
-            self._last_valid_alpha = None
             self._last_valid_time = None
 
         # Wall-lost is a GEOMETRIC determination only: perp beam gone
@@ -430,7 +346,7 @@ class WallNavNode(Node):
         # untrustworthy," NOT "the wall has disappeared" — so spikes
         # must NOT advance the lost timer. Coupling them used to let
         # a window-glint burst fire a spurious corner commit mid-hallway.
-        wall_lost_now = (not math.isfinite(D_ahead)) or D_ahead > max_plausible
+        wall_lost_now = (not math.isfinite(D)) or D > max_plausible
 
         # Sticky recovery: require N consecutive wall-present scans to
         # clear lost state. Spikes are neutral — they neither reset
@@ -533,22 +449,19 @@ class WallNavNode(Node):
         target = self.get_parameter("target_distance").value
         kp = self.get_parameter("kp").value
         kd = self.get_parameter("kd").value
-        k_alpha = self.get_parameter("k_alpha").value
         k_yaw = self.get_parameter("k_yaw").value
         max_steer = self.get_parameter("max_steering").value
         v_max = self.get_parameter("forward_speed").value
-        alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         d_alpha = self.get_parameter("d_error_alpha").value
         max_error = self.get_parameter("max_error").value
 
-        # Spike with wall still visible: fall back to the last trusted
-        # (D, α) for this scan's PD rather than treating the bad sample
-        # as truth. If we don't have recent valid history, skip the PD
-        # this scan entirely (hold previous command via no publish).
+        # Spike with wall still visible: fall back to the last trusted D
+        # for this scan's PD rather than treating the bad sample as
+        # truth. If we don't have recent valid history, skip the PD this
+        # scan entirely (hold previous command via no publish).
         if is_spike:
             if self._last_valid_D is not None:
-                D_ahead = self._last_valid_D
-                alpha = self._last_valid_alpha
+                D = self._last_valid_D
             else:
                 self.get_logger().info(
                     "spike with no valid history — skipping PD this scan"
@@ -558,14 +471,13 @@ class WallNavNode(Node):
             # Non-spike, non-lost scan accepted — record as new reference.
             # (`_last_good_time` is set in the wall-state classification
             # block above so it also updates during sticky recovery.)
-            self._last_valid_D = D_ahead
-            self._last_valid_alpha = alpha
+            self._last_valid_D = D
             self._last_valid_time = now
 
         # Positive error => too close to the wall => steer left (+angular.z).
         # Clip before the PD so a single outlier reading can't send the
         # gains to full lock.
-        error = target - D_ahead
+        error = target - D
         error = max(-max_error, min(max_error, error))
 
         if self._prev_time is None:
@@ -578,39 +490,27 @@ class WallNavNode(Node):
         self._prev_d_error = d_error
         self._prev_time = now
 
-        # PD on distance + α-feedback + yaw-rate damping. α<0 (car yawed
-        # toward right wall) pushes `steering` more positive → more "turn
-        # left" in REP-103 → actively un-yaws the car while it closes on
-        # the target. Yaw-rate term opposes the current rotation directly
-        # using the IMU (less noisy than differentiating distance error).
-        # Clip α used in the α-feedback term so a bogus diagonal-beam
-        # reading (e.g. through a window) can't single-handedly saturate
-        # the steering. Speed scaling below uses unclipped α so the
-        # car still slows down when α is large.
-        max_alpha_rad = math.radians(self.get_parameter("max_alpha_deg").value)
-        alpha_clipped = max(-max_alpha_rad, min(max_alpha_rad, alpha))
+        # PD on distance + yaw-rate damping. Yaw-rate term opposes the
+        # current rotation directly using the IMU — corrects heading
+        # drift (the job α-feedback used to do, now from a sensor
+        # signal that isn't fooled by glass).
         yaw_rate = self._yaw_rate
-        steering = kp * error + kd * d_error - k_alpha * alpha_clipped - k_yaw * yaw_rate
+        steering = kp * error + kd * d_error - k_yaw * yaw_rate
         # Sign-flip (if the rover is wired inverted) then clamp, then bias.
         # Bias shifts the neutral point — not part of the control effort, so
         # it's applied after the clamp.
         steering = sign * steering
         steering = max(-max_steer, min(max_steer, steering)) + bias
 
-        # Ease off the throttle when the wall is swinging away (corner/jut).
-        speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)
-        forward_speed = max(v_min, v_max * speed_scale)
-
         drive_cmd = Twist()
-        drive_cmd.linear.x = float(forward_speed)
+        drive_cmd.linear.x = float(v_max)
         drive_cmd.angular.z = float(steering)
         self.cmd_pub.publish(drive_cmd)
 
         fwd_str = f"{fwd:.2f}" if math.isfinite(fwd) else "  inf"
         self.get_logger().info(
-            f"D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}° fwd={fwd_str}m "
-            f"err={error:+.2f} dErr={d_error:+.2f} yaw={yaw_rate:+.2f} "
-            f"steer={steering:+.2f} v={forward_speed:.2f}"
+            f"D={D:.2f}m fwd={fwd_str}m err={error:+.2f} dErr={d_error:+.2f} "
+            f"yaw={yaw_rate:+.2f} steer={steering:+.2f} v={v_max:.2f}"
         )
 
 

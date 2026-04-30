@@ -135,7 +135,7 @@ class WallNavNode(Node):
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.2)
-        self.declare_parameter("forward_speed", 1.80)
+        self.declare_parameter("forward_speed", 2.00)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0 degrees), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.

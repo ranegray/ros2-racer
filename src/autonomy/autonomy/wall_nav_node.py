@@ -219,7 +219,7 @@ class WallNavNode(Node):
         # disable. 15 degrees was sized for ~2.5ft (0.76m) windows at the
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
-        self.declare_parameter("scan_dilation_deg", 15.0)
+        self.declare_parameter("scan_dilation_deg", 12.0)
         # Front crash avoidance: two diagonal rays (+/-front_avoid_deg) detect
         # whether the approaching wall is angled or flat.
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right

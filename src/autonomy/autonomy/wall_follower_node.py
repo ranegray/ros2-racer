@@ -193,11 +193,14 @@ class WallFollowerNode(Node):
         # IMU yaw rate (rad/s)
         self._yaw_rate = 0.0
 
-        # Cone index caches (built on first scan)
+        # Cone index caches — rebuilt whenever the scan's angle parameters change
+        # (driver restart, retuning, swap to a different scan source).
         self._left_idx = []
         self._front_idx = []
         self._center_idx = []
-        self._idx_cached = False
+        self._cached_angle_min: float = float("nan")
+        self._cached_angle_increment: float = float("nan")
+        self._cached_n: int = -1
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
 
@@ -339,15 +342,24 @@ class WallFollowerNode(Node):
             self._watchdog_recovery = 0
             self.get_logger().info("Scan stream recovered — resuming wall follower")
 
-        # Build cone caches once
-        if not self._idx_cached:
+        # Build / rebuild cone caches if the scan's angle layout changes.
+        # NaN != NaN forces a build on the first scan.
+        n = len(msg.ranges)
+        if (
+            self._cached_angle_min != msg.angle_min
+            or self._cached_angle_increment != msg.angle_increment
+            or self._cached_n != n
+        ):
             self._left_idx = self._cone_indices(msg, 90.0, LEFT_CONE_DEG)
             self._front_idx = self._cone_indices(msg, 0.0, FRONT_CONE_DEG)
             self._center_idx = self._cone_indices(msg, 0.0, CENTER_CONE_DEG)
-            self._idx_cached = True
+            self._cached_angle_min = msg.angle_min
+            self._cached_angle_increment = msg.angle_increment
+            self._cached_n = n
             self.get_logger().info(
-                f"Cone caches: left={len(self._left_idx)} "
-                f"front={len(self._front_idx)} center={len(self._center_idx)}"
+                f"Cone caches (rebuilt): left={len(self._left_idx)} "
+                f"front={len(self._front_idx)} center={len(self._center_idx)} "
+                f"n={n} amin={msg.angle_min:.3f} ainc={msg.angle_increment:.5f}"
             )
 
         ranges = np.array(msg.ranges, dtype=np.float32)

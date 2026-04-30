@@ -137,8 +137,7 @@ class WallNavNode(Node):
         # sits at negative angles.
         self.declare_parameter("ray_a_deg", -45.0)  # forward-right beam
         self.declare_parameter("ray_b_deg", -90.0)  # perpendicular-right beam
-        self.declare_parameter("ray_a_half_window_deg", 5.0)   # forward-diagonal (-45°): keep narrow, feeds geometry
-        self.declare_parameter("ray_b_half_window_deg", 20.0)  # perpendicular (-90°): wide for stable wall-lost detection
+        self.declare_parameter("ray_half_window_deg", 20.0)
         self.declare_parameter("look_ahead", 0.5)
         # Slow the car down as the wall-angle |alpha| grows (corners, juts).
         # With closed-loop velocity (rover_node use_velocity_feedback=true)
@@ -340,12 +339,11 @@ class WallNavNode(Node):
         """
         ray_a_deg = self.get_parameter("ray_a_deg").value
         ray_b_deg = self.get_parameter("ray_b_deg").value
-        half_a = math.radians(self.get_parameter("ray_a_half_window_deg").value)
-        half_b = math.radians(self.get_parameter("ray_b_half_window_deg").value)
+        half = math.radians(self.get_parameter("ray_half_window_deg").value)
         L = self.get_parameter("look_ahead").value
 
-        a = self._ray_at_angle(msg, math.radians(ray_a_deg), half_a)
-        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half_b)
+        a = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
+        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
         a_ok = math.isfinite(a)
         b_ok = math.isfinite(b)
 

@@ -105,20 +105,32 @@ def generate_launch_description():
                 ],
                 output="screen",
             ),
-            # Odometry: integrates cmd_vel → /odom + TF odom→base_link
-            Node(
-                package="autonomy",
-                executable="odometry_node",
-                name="odometry_node",
-                output="screen",
-                parameters=[{"wheelbase": wheelbase}],
-            ),
             # IMU adapter: imu/gyro + imu/accel → /imu
             Node(
                 package="autonomy",
                 executable="imu_adapter_node",
                 name="imu_adapter_node",
                 output="screen",
+            ),
+            # rf2o laser odometry — owns the odom→base_link TF.
+            # Laser-derived odom is far more accurate than cmd_vel dead-reckoning
+            # (no tire slip, no wheelbase error) so slam_toolbox gets a better
+            # prior before scan matching, and the map builds cleaner.
+            Node(
+                package="rf2o_laser_odometry",
+                executable="rf2o_laser_odometry_node",
+                name="rf2o_laser_odometry",
+                parameters=[{
+                    "laser_scan_topic": "/scan",
+                    "odom_topic": "/odom_rf2o",
+                    "publish_tf": True,
+                    "base_frame_id": "base_link",
+                    "odom_frame_id": "odom",
+                    "init_pose_from_topic": "",
+                    "freq": 10.0,
+                }],
+                ros_arguments=["--log-level", "rf2o_laser_odometry:=FATAL"],
+                output="log",
             ),
             # slam_toolbox online async mapping
             Node(
@@ -127,23 +139,6 @@ def generate_launch_description():
                 name="slam_toolbox",
                 output="screen",
                 parameters=[slam_config],
-            ),
-            # rf2o laser odometry — velocity feedback only; odometry_node owns the odom TF
-            Node(
-                package="rf2o_laser_odometry",
-                executable="rf2o_laser_odometry_node",
-                name="rf2o_laser_odometry",
-                parameters=[{
-                    "laser_scan_topic": "/scan",
-                    "odom_topic": "/odom_rf2o",
-                    "publish_tf": False,
-                    "base_frame_id": "base_link",
-                    "odom_frame_id": "odom",
-                    "init_pose_from_topic": "",
-                    "freq": 10.0,
-                }],
-                ros_arguments=["--log-level", "rf2o_laser_odometry:=FATAL"],
-                output="log",
             ),
             # Wall nav — Lap 1 driver (PD wall follower, subscribes to /scan directly)
             Node(

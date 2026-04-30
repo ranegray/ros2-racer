@@ -19,15 +19,17 @@ slam_toolbox:
     resolution: 0.05              # 5 cm/cell — good for hallway features
     max_laser_range: 8.0          # RPLIDAR A1 max ~8 m
 
-    # Scan matching
+    # Scan matching — tuned to favour scan matching over odometry.
+    # rf2o now provides odom TF so the prior is already good; these settings
+    # make slam_toolbox match aggressively and loop-close tightly.
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.05
-    minimum_travel_heading: 0.1
-    scan_buffer_size: 10
+    minimum_travel_distance: 0.02   # match every ~2 cm (was 5 cm)
+    minimum_travel_heading: 0.05    # match every ~3 deg heading change (was 0.1)
+    scan_buffer_size: 20            # more scans available for matching (was 10)
     scan_buffer_maximum_scan_distance: 10.0
-    link_match_minimum_response_fine: 0.1
-    link_scan_maximum_distance: 1.5
+    link_match_minimum_response_fine: 0.05  # accept lower-quality matches (was 0.1)
+    link_scan_maximum_distance: 2.0         # match against scans up to 2 m back (was 1.5)
     do_loop_closing: true
 
     # TF / timing

@@ -52,6 +52,10 @@ MAX_ALPHA_JUMP_DEG = (
     30.0  # degrees — max alpha change per scan (windows/gaps cause bigger jumps)
 )
 SPIKE_STALE_S = 0.7  # s — invalidate spike history after this gap
+# If readings stay clustered within MAX_D_JUMP / MAX_ALPHA_JUMP_DEG of EACH OTHER
+# for this many consecutive flagged scans, the geometry has stabilized in a new
+# place (real corner) — force-accept the new anchor instead of latching forever.
+SPIKE_CLUSTER_SCANS = 3
 
 # Sticky recovery: require N consecutive valid scans to exit lost mode
 LOST_RECOVERY_SCANS = 3
@@ -171,6 +175,9 @@ class WallFollowerNode(Node):
         self._last_valid_D = None
         self._last_valid_alpha = None
         self._last_valid_time = None
+        # Recent flagged-as-spike (D, alpha) tuples — used to detect when readings
+        # have stabilized in new geometry vs. transient doorway/window glitches.
+        self._spike_cluster: list[tuple[float, float]] = []
 
         # Right-wall sticky-recovery state
         self._right_lost_since = None  # seconds when right wall first went absent
@@ -447,12 +454,37 @@ class WallFollowerNode(Node):
                 is_spike = True
                 self.get_logger().info(f"spike: ΔD={dD:.2f}m Δα={da:.1f}°")
 
+        # Spike clustering: brief glitches (doorways/windows) are isolated single
+        # scans. Real corners produce a sustained jump where the new readings
+        # cluster around each other but stay far from the old anchor. Track
+        # consecutive flagged readings; if they're internally stable for
+        # SPIKE_CLUSTER_SCANS samples, accept the new geometry.
+        if is_spike and math.isfinite(D_ahead):
+            self._spike_cluster.append((D_ahead, alpha))
+            if len(self._spike_cluster) >= SPIKE_CLUSTER_SCANS:
+                window = self._spike_cluster[-SPIKE_CLUSTER_SCANS:]
+                Ds = [d for d, _ in window]
+                As = [a for _, a in window]
+                if (
+                    max(Ds) - min(Ds) <= MAX_D_JUMP
+                    and math.degrees(max(As) - min(As)) <= MAX_ALPHA_JUMP_DEG
+                ):
+                    self.get_logger().info(
+                        f"spike cluster stabilized — accepting new anchor "
+                        f"D={D_ahead:.2f}m α={math.degrees(alpha):+.1f}°"
+                    )
+                    is_spike = False
+                    self._spike_cluster = []
+        else:
+            self._spike_cluster = []
+
         # Expire stale spike history
         if (
             self._last_valid_time is not None
             and (now_s - self._last_valid_time) >= SPIKE_STALE_S
         ):
             self._last_valid_D = self._last_valid_alpha = self._last_valid_time = None
+            self._spike_cluster = []
 
         # --- Right-wall loss + sticky recovery ---
         right_gone_now = (

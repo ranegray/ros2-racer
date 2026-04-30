@@ -508,7 +508,7 @@ class WallNavNode(Node):
                     - avoid_kd * d_asym
                 )
                 avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
-                avoid_steer += bias
+                avoid_steer = sign * avoid_steer + bias
                 self._avoid_confirm = 0  # must reconfirm before firing again
                 cmd = Twist()
                 cmd.linear.x = float(avoid_speed)

@@ -129,6 +129,7 @@ MAX_ERROR = 0.4  # clip distance error before PD
 
 # Watchdog
 SCAN_TIMEOUT_S = 1.0  # s — stop rover if no scan received for this long
+WATCHDOG_RECOVERY_SCANS = 3  # consecutive scans before resuming motion after a stop
 
 # Output
 # SIGN = -1: positive pre-sign value → negative angular.z → LEFT on this rover.
@@ -218,8 +219,12 @@ class WallFollowerNode(Node):
         )
         self.create_subscription(Vector3, "imu/gyro", self._gyro_cb, _sensor_qos)
 
-        # Watchdog: if no scan arrives for SCAN_TIMEOUT_S, stop the rover
+        # Watchdog: if no scan arrives for SCAN_TIMEOUT_S, stop the rover.
+        # Stays stopped (republishing zero) until WATCHDOG_RECOVERY_SCANS
+        # consecutive scans arrive — prevents stop/go lurching on flaky streams.
         self._last_scan_time: float = 0.0
+        self._watchdog_stopped = False
+        self._watchdog_recovery = 0
         self._watchdog = self.create_timer(0.5, self._watchdog_cb)
 
         self.get_logger().info("Hybrid F1TENTH+dual-wall follower started")
@@ -237,16 +242,19 @@ class WallFollowerNode(Node):
         self._yaw_rate = msg.z
 
     def _watchdog_cb(self):
-        """Stop the rover if no scan has arrived recently."""
+        """Stop the rover if no scan has arrived recently. Holds the stop until
+        scan_cb sees WATCHDOG_RECOVERY_SCANS consecutive scans."""
         if not self._active:
             return
         now = self.get_clock().now().nanoseconds * 1e-9
         if self._last_scan_time > 0 and (now - self._last_scan_time) > SCAN_TIMEOUT_S:
-            cmd = Twist()  # zero twist = stop
-            self._cmd_pub.publish(cmd)
-            self.get_logger().warn(
-                f"No scan for {now - self._last_scan_time:.1f}s — stopping rover"
-            )
+            if not self._watchdog_stopped:
+                self._watchdog_stopped = True
+                self._watchdog_recovery = 0
+                self.get_logger().warn(
+                    f"No scan for {now - self._last_scan_time:.1f}s — stopping rover"
+                )
+            self._cmd_pub.publish(Twist())  # hold zero each tick while stopped
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -319,6 +327,17 @@ class WallFollowerNode(Node):
         if not self._active:
             return
         self._last_scan_time = self.get_clock().now().nanoseconds * 1e-9
+
+        # Watchdog recovery: require WATCHDOG_RECOVERY_SCANS consecutive scans
+        # before resuming motion, so a flaky stream cannot lurch stop -> go.
+        if self._watchdog_stopped:
+            self._watchdog_recovery += 1
+            if self._watchdog_recovery < WATCHDOG_RECOVERY_SCANS:
+                self._cmd_pub.publish(Twist())
+                return
+            self._watchdog_stopped = False
+            self._watchdog_recovery = 0
+            self.get_logger().info("Scan stream recovered — resuming wall follower")
 
         # Build cone caches once
         if not self._idx_cached:

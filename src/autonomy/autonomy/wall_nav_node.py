@@ -239,7 +239,7 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit
         self.declare_parameter("avoid_crash_close_dist", 1.5)     # m -- allow left escape
         self.declare_parameter("avoid_crash_left_max", 1.0)       # max left steer
-        self.declare_parameter("avoid_max_speed", 0.6)            # m/s cap during any avoid
+        self.declare_parameter("avoid_max_speed", 0.4)            # m/s cap during any avoid
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)

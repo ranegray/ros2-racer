@@ -13,8 +13,13 @@ or estimator NaN) IS the corner signal. Doorways/windows lose the wall
 briefly; real corners lose it permanently. So we coast straight for
 `lost_coast_s` (clears short gaps without committing), then execute a
 fixed-duration ~90° right turn (`commit_turn_s` at full lock), then
-release back to PD. If the wall is still missing the next scan, a
-fresh coast→turn cycle starts automatically.
+release back to PD. The phase clock resets on any good scan, so a
+flickery wall (windows, mesh, partial occluders) keeps us in coast
+instead of crossing into the turn phase on cumulative-lost time. If
+the wall is still missing the next scan, a fresh coast→turn cycle
+starts automatically. After `max_lost_time_s` of continuous loss the
+car idles (zero velocity) until the wall returns — prevents endless
+spinning in open spaces.
 """
 
 import math
@@ -46,6 +51,16 @@ class WallNavNode(Node):
         # `lost_recovery_scans` — a single good scan in the middle of a
         # spike-rejected burst does NOT reset the lost timer.
         self._valid_run = 0
+        # Time of the last non-spike good scan. Used as the phase-clock
+        # anchor inside the lost cycle: when the wall briefly returns
+        # (window, mesh fence, etc.), the phase clock resets so a flickery
+        # wall doesn't accumulate cumulative-lost time and fire a spurious
+        # 90° turn. Also drives the open-space idle timeout: it does NOT
+        # reset between coast→turn→release cycles, so if the wall has
+        # been continuously absent for `max_lost_time_s`, we stop trying.
+        # Initialized to the first scan's timestamp so the idle timer has
+        # a sensible anchor when we never see the wall.
+        self._last_good_time = None
         # For spike detection: last VALID (D_ahead, alpha) and its timestamp.
         self._last_valid_D = None
         self._last_valid_alpha = None
@@ -64,7 +79,7 @@ class WallNavNode(Node):
         # on straights AND helps drive turn-in as the wall starts bending
         # away through a corner. Final command:
         # sign * (kp·err + kd·dE − k_alpha·α).
-        self.declare_parameter("k_alpha", 3.5)
+        self.declare_parameter("k_alpha", 2.0)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
@@ -97,9 +112,9 @@ class WallNavNode(Node):
         # Hard stop if the forward sweep reads closer than this in any
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
-        self.declare_parameter("emergency_stop_fwd_m", 0.45)
-        self.declare_parameter("target_distance", 0.6)
-        self.declare_parameter("forward_speed", 0.45)
+        self.declare_parameter("emergency_stop_fwd_m", 0.0)
+        self.declare_parameter("target_distance", 0.8)
+        self.declare_parameter("forward_speed", 1.20)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0°), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.
@@ -114,7 +129,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.12)
+        self.declare_parameter("min_forward_speed", 0.25)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
@@ -132,30 +147,43 @@ class WallNavNode(Node):
         # `lost_turn_steering` — raw post-sign — +2.0 = full-lock RIGHT
         # on the inverted rover), then hand back to PD. If the wall is
         # still missing on the next scan, a fresh coast-then-turn cycle
-        # starts automatically. The emergency-stop on close forward
-        # distance is the actual safety net for "we got into open space".
+        # starts automatically. After `max_lost_time_s` of continuous
+        # loss without ever recovering, the car idles (zero velocity)
+        # — the safety net for driving into open space.
         # `commit_turn_s` default of 2.0s is sized for ~45°/s rotation
-        # at full lock at 0.3 m/s, giving roughly a 90° heading change.
-        # 0.3s ≈ 2-3 scans at ~8-10 Hz: long enough to ride out single-
-        # scan glitches, short enough that the commit fires near the
-        # actual corner (otherwise the car drives several body-lengths
-        # past the entrance before turning and ends up too deep in the
-        # new corridor to make the turn cleanly).
+        # at full lock at ~0.4 m/s (`commit_speed`), giving roughly a
+        # 90° heading change. `lost_coast_s` of 0.3s is long enough to
+        # ride out single-scan glitches, short enough that the commit
+        # fires near the actual corner (otherwise the car drives
+        # several body-lengths past the entrance before turning and
+        # ends up too deep in the new corridor to make the turn
+        # cleanly). The phase clock resets on any non-spike good scan,
+        # so flickery walls (windows, mesh) stay in coast indefinitely
+        # rather than accumulating cumulative-lost time into the turn
+        # phase.
         self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
         # Speed during the lost cycle (coast + turn + release). Decoupled
-        # from v_min so cruise tuning doesn't change corner geometry. The
-        # commit_turn_s default (2.0s at full lock) was sized for ~45°/s
-        # rotation, which on this rover requires ~0.4 m/s forward — at
-        # lower speeds a 2s commit only completes a partial turn.
+        # from v_min so cruise tuning doesn't change corner geometry.
+        # 2s × ~45°/s rotation at full lock at ~0.4 m/s gives a clean ~90°.
+        # At lower speeds a 2s commit only completes a partial turn.
         self.declare_parameter("commit_speed", 0.4)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common
         # during corner approach) resets `_lost_since` and the commit
         # never fires. At ~8-10 Hz scan rate, 3 scans ≈ 0.3–0.4s.
+        # Decoupled from `lost_coast_s` — phase clock now uses
+        # `_last_good_time`, so the recovery window can outlast coast
+        # without firing the turn on a visible wall.
         self.declare_parameter("lost_recovery_scans", 3)
+        # Open-space idle timeout. If the wall has been continuously
+        # absent for this long (no good scan AT ALL — flickery walls
+        # don't count), stop driving and idle until something changes.
+        # Without this, the coast→turn→release cycle repeats forever,
+        # spinning the car in place. ~3 cycles at default params.
+        self.declare_parameter("max_lost_time_s", 8.0)
         # Damping gain on measured yaw rate (rad/s) from imu/gyro.z. Applied
         # in the REP-103 control frame (before the steering_sign flip), so
         # a positive yaw rate (CCW / left) subtracts from `steering` to
@@ -276,6 +304,12 @@ class WallNavNode(Node):
 
         now = self.get_clock().now().nanoseconds * 1e-9
 
+        # Anchor the idle timer to the first scan when the wall has never
+        # been visible — otherwise idle_for would compare against epoch
+        # and trip on the very first lost scan.
+        if self._last_good_time is None:
+            self._last_good_time = now
+
         # Emergency stop: forward sweep says we're physically close to a
         # wall. Independent safety net — fires regardless of mode.
         e_stop_fwd = self.get_parameter("emergency_stop_fwd_m").value
@@ -335,6 +369,12 @@ class WallNavNode(Node):
             pass
         else:
             self._valid_run += 1
+            # Phase/idle clock anchor — must update HERE (not later in
+            # the PD branch) so flickery good scans during sticky
+            # recovery still reset the phase clock. Otherwise the
+            # cumulative-lost timer drives a spurious turn even though
+            # the wall briefly returned.
+            self._last_good_time = now
 
         recovery_scans = self.get_parameter("lost_recovery_scans").value
         treat_as_lost = wall_lost_now or (
@@ -342,16 +382,31 @@ class WallNavNode(Node):
         )
 
         # Wall lost: doorways/windows lose it briefly, right-turn corners
-        # lose it permanently. Three phases:
+        # lose it permanently. Four phases:
         #   coast   (0  ≤ t < lost_coast_s)        — handles short gaps
         #   turn    (   lost_coast_s ≤ t < +turn_s) — fixed-duration ~90°
         #   release (t ≥ lost_coast_s + turn_s)    — hand back to PD
-        # If the wall is still missing the next scan, the cycle restarts.
+        #   idle    (idle_for > max_lost_time_s)    — open-space stop
+        # The phase clock `lost_for` uses `_last_good_time` so flickery
+        # walls don't accumulate cumulative-lost time; `idle_for` uses
+        # _last_good_time WITHOUT the cycle reset, so it tracks true
+        # continuous loss across coast→turn→release cycles.
         if treat_as_lost:
-            lost_for = now - self._lost_since
             coast_s = self.get_parameter("lost_coast_s").value
             turn_s = self.get_parameter("commit_turn_s").value
             commit_speed = self.get_parameter("commit_speed").value
+            max_lost_time_s = self.get_parameter("max_lost_time_s").value
+
+            # Phase clock: time since the wall was last visible OR since
+            # this lost cycle began, whichever is later. The `max` means
+            # a brief good scan inside the cycle resets the phase, so a
+            # flickery wall doesn't drift into the turn phase on
+            # cumulative-lost time.
+            phase_anchor = max(self._last_good_time, self._lost_since)
+            lost_for = now - phase_anchor
+            # Idle clock: time since the wall was last actually trusted.
+            # Doesn't reset on release — tracks true continuous loss.
+            idle_for = now - self._last_good_time
 
             # Reset PD state so it doesn't spike when the wall returns.
             self._prev_error = 0.0
@@ -361,7 +416,14 @@ class WallNavNode(Node):
             cmd = Twist()
             cmd.linear.x = float(commit_speed)
 
-            if lost_for < coast_s:
+            if idle_for > max_lost_time_s:
+                # Open space — give up cycling. Idle until the wall
+                # actually comes back; a non-spike good scan will reset
+                # _last_good_time and we'll re-enter coast on the next tick.
+                cmd.linear.x = 0.0
+                cmd.angular.z = 0.0
+                mode = "idle"
+            elif lost_for < coast_s:
                 # Brief gap (doorway, window) — coast straight.
                 cmd.angular.z = float(bias)
                 mode = "coast"
@@ -375,7 +437,8 @@ class WallNavNode(Node):
                 # Turn complete. Release the lost cycle. If the wall is
                 # still missing this scan we publish a brief straight so
                 # PD doesn't run on NaN; the next scan will start a fresh
-                # coast→turn cycle if still lost.
+                # coast→turn cycle if still lost (or trip idle once
+                # idle_for crosses max_lost_time_s).
                 cmd.angular.z = float(bias)
                 mode = "release"
                 self._lost_since = None
@@ -383,8 +446,8 @@ class WallNavNode(Node):
 
             self.cmd_pub.publish(cmd)
             self.get_logger().info(
-                f"wall lost ({lost_for:.2f}s) {mode}: "
-                f"steer={cmd.angular.z:+.2f} v={commit_speed:.2f} "
+                f"wall lost (phase={lost_for:.2f}s idle={idle_for:.2f}s) {mode}: "
+                f"steer={cmd.angular.z:+.2f} v={cmd.linear.x:.2f} "
                 f"run={self._valid_run}/{recovery_scans}"
             )
             return
@@ -417,6 +480,8 @@ class WallNavNode(Node):
                 return
         else:
             # Non-spike, non-lost scan accepted — record as new reference.
+            # (`_last_good_time` is set in the wall-state classification
+            # block above so it also updates during sticky recovery.)
             self._last_valid_D = D_ahead
             self._last_valid_alpha = alpha
             self._last_valid_time = now
@@ -475,6 +540,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Publish a zero Twist on shutdown so the rover doesn't keep
+        # rolling on the last command if rover_node has no watchdog.
+        try:
+            node.cmd_pub.publish(Twist())
+        except Exception:
+            pass
         node.destroy_node()
         try:
             rclpy.shutdown()

@@ -227,11 +227,11 @@ class WallNavNode(Node):
         #   |asymmetry| < front_avoid_min_asym  ->  flat wall    ->  full-lock right
         # A gap filter skips avoid when a diagonal reads much farther than the
         # forward distance (doorway/window beside us), unless we are very close.
-        self.declare_parameter("front_avoid_thresh", 2.0)        # m -- start checking
+        self.declare_parameter("front_avoid_thresh", 1.3)        # m -- start checking
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 0.3)
+        self.declare_parameter("front_avoid_kp", 0.15)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
@@ -508,6 +508,7 @@ class WallNavNode(Node):
                     )
                     avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
                     avoid_steer += bias
+                    self._avoid_confirm = 0  # must reconfirm before firing again
                     cmd = Twist()
                     cmd.linear.x = float(avoid_speed)
                     cmd.angular.z = float(avoid_steer)

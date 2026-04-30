@@ -137,7 +137,7 @@ class WallNavNode(Node):
         # sits at negative angles.
         self.declare_parameter("ray_a_deg", -45.0)  # forward-right beam
         self.declare_parameter("ray_b_deg", -90.0)  # perpendicular-right beam
-        self.declare_parameter("ray_half_window_deg", 10.0)
+        self.declare_parameter("ray_half_window_deg", 20.0)
         self.declare_parameter("look_ahead", 0.5)
         # Slow the car down as the wall-angle |alpha| grows (corners, juts).
         # With closed-loop velocity (rover_node use_velocity_feedback=true)

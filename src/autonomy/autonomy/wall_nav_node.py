@@ -165,7 +165,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.5)
+        self.declare_parameter("min_forward_speed", 0.3)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
@@ -290,8 +290,11 @@ class WallNavNode(Node):
         # Mark invalid rays as +inf so they don't pollute the min and
         # don't accidentally win it. NaN/out-of-range/inf all map to inf.
         valid = [
-            r if (math.isfinite(r) and msg.range_min <= r <= msg.range_max)
-            else float("inf")
+            (
+                r
+                if (math.isfinite(r) and msg.range_min <= r <= msg.range_max)
+                else float("inf")
+            )
             for r in msg.ranges
         ]
 
@@ -685,7 +688,9 @@ class WallNavNode(Node):
         max_alpha_rad = math.radians(self.get_parameter("max_alpha_deg").value)
         alpha_clipped = max(-max_alpha_rad, min(max_alpha_rad, alpha))
         yaw_rate = self._yaw_rate
-        steering = kp * error + kd * d_error - k_alpha * alpha_clipped - k_yaw * yaw_rate
+        steering = (
+            kp * error + kd * d_error - k_alpha * alpha_clipped - k_yaw * yaw_rate
+        )
         # Sign-flip (if the rover is wired inverted) then clamp, then bias.
         # Bias shifts the neutral point — not part of the control effort, so
         # it's applied after the clamp.

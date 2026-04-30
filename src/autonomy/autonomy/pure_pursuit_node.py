@@ -13,9 +13,9 @@ Algorithm (Ackermann-native):
   4. Steering angle: δ = atan2(2 * L * sin(α), L_d)
   5. cmd_vel: angular.z = v * tan(δ) / L   (sign convention: positive = left in ROS)
 
-Note on sign convention: this rover maps cmd_vel angular.z identically to
-wall_follower — positive angular.z drives left.  Pure pursuit computes α
-positive-left by convention, so the output sign is correct without inversion.
+Note on sign convention: this rover is wired inverted -- positive angular.z
+physically steers RIGHT (not left as REP-103 expects).  Pure pursuit computes
+alpha positive-left, so the output must be negated before publishing.
 
 Parameters:
   path_file      — fallback yaml path  (default ~/.ros/recorded_path.yaml)
@@ -199,6 +199,7 @@ class PurePursuitNode(Node):
         L_d_eff = max(dist, 0.1)
         delta = math.atan2(2.0 * self._L * math.sin(alpha), L_d_eff)
         angular_z = self._speed * math.tan(delta) / self._L
+        angular_z = -angular_z  # invert: this rover positive angular.z = RIGHT
         angular_z = max(-2.0, min(2.0, angular_z))
 
         cmd = Twist()

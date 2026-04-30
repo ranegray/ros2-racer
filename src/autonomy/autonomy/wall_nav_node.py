@@ -83,6 +83,14 @@ class WallNavNode(Node):
         # away through a corner. Final command:
         # sign * (kp·err + kd·dE − k_alpha·α).
         self.declare_parameter("k_alpha", 2.0)
+        # Clip |α| used in the steering equation. With k_alpha=2.0, an
+        # uncapped α=35° (typical for a diagonal beam reading through a
+        # window) contributes -1.22 rad/s to steering — 60% of full lock
+        # before any other term. Capping at 25° keeps α-feedback's max
+        # contribution to ~0.87, so PD/yaw still have headroom and a
+        # bogus α can't single-handedly slam the steering into the wall.
+        # Real sharp corners are handled by the wall-lost commit, not α.
+        self.declare_parameter("max_alpha_deg", 25.0)
         # Clamp the control effort BEFORE bias. ±2.0 maps to full servo
         # lock (rover uses angular.z*500 clipped to ±1000).
         self.declare_parameter("max_steering", 2.0)
@@ -335,6 +343,14 @@ class WallNavNode(Node):
         if not b_ok:
             return float("nan"), float("nan")
 
+        # Note: deliberately no geometric sanity check on a/b here.
+        # Real right-corner approach IS "a grows large while b stays
+        # normal" — that's the signal we use for early turn-in via
+        # α-feedback. Rejecting large a/b would suppress the very thing
+        # we need to detect corners. Through-glass false positives are
+        # mitigated upstream (dilation) and downstream (α clip) without
+        # killing the corner signal.
+
         # Forward-diagonal missing: perpendicular only, no look-ahead.
         # `b` is by definition the right wall, so this is safe.
         if not a_ok:
@@ -567,8 +583,14 @@ class WallNavNode(Node):
         # left" in REP-103 → actively un-yaws the car while it closes on
         # the target. Yaw-rate term opposes the current rotation directly
         # using the IMU (less noisy than differentiating distance error).
+        # Clip α used in the α-feedback term so a bogus diagonal-beam
+        # reading (e.g. through a window) can't single-handedly saturate
+        # the steering. Speed scaling below uses unclipped α so the
+        # car still slows down when α is large.
+        max_alpha_rad = math.radians(self.get_parameter("max_alpha_deg").value)
+        alpha_clipped = max(-max_alpha_rad, min(max_alpha_rad, alpha))
         yaw_rate = self._yaw_rate
-        steering = kp * error + kd * d_error - k_alpha * alpha - k_yaw * yaw_rate
+        steering = kp * error + kd * d_error - k_alpha * alpha_clipped - k_yaw * yaw_rate
         # Sign-flip (if the rover is wired inverted) then clamp, then bias.
         # Bias shifts the neutral point — not part of the control effort, so
         # it's applied after the clamp.

@@ -232,7 +232,7 @@ class WallNavNode(Node):
         # Gap threading: fwd blocked + right diagonal open → steer right.
         self.declare_parameter("gap_fwd_thresh", 3.0)             # m -- fwd counts as blocked
         self.declare_parameter("gap_diag_mult", 1.5)              # diag_R must be > fwd * this
-        self.declare_parameter("gap_confirm_scans", 3)            # scans to confirm
+        self.declare_parameter("gap_confirm_scans", 2)            # scans to confirm
         # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
         self.declare_parameter("gap_slow_thresh", 3.0)            # m -- start slowing
         self.declare_parameter("gap_slow_min_speed", 0.6)         # m/s floor while slowing

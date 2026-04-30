@@ -86,7 +86,7 @@ class WallNavNode(Node):
         # Note: on this robot `cmd_vel.angular.z` is a normalised STEERING
         # command (rover_node maps it as angular.z * 500 clipped to +/-1000,
         # so +/-2 = full lock). Gains are tuned for that, not for rad/s.
-        self.declare_parameter("kp", 0.4)
+        self.declare_parameter("kp", 0.3)
         self.declare_parameter("kd", 0.15)
         # alpha-feedback: counteracts the car's yaw toward/away from the wall
         # on straights AND helps drive turn-in as the wall starts bending
@@ -135,7 +135,7 @@ class WallNavNode(Node):
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.3)
-        self.declare_parameter("forward_speed", 1.00)
+        self.declare_parameter("forward_speed", 1.20)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0 degrees), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.

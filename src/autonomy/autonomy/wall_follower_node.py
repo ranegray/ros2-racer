@@ -106,7 +106,10 @@ AVOID_CRASH_LEFT_MAX = 1.0  # max left steer in crash escape (subtle, half of fu
 # When right wall is gone, RAY_A (-45°) reads far → open right hallway → turn right.
 # When RAY_A reads close → doorway recess → go straight as normal.
 RIGHT_OPEN_THRESH = 1.5  # m — RAY_A beyond this = right hallway confirmed
-RIGHT_HALLWAY_MAX_RAY = 6.0  # m — RAY_A upper bound: wide corridors read 4-6m, windows/glass read NaN or 8m+
+RIGHT_HALLWAY_MAX_RAY = 4.0  # m — RAY_A upper bound. Lowered from 6.0: a lit lab
+# window on the course returns stable 4-5m readings (IR-bright objects behind glass)
+# and was passing as a hallway. Real right turns on this course read < 4m at the
+# diagonal — verify if a real corner ever fails to commit and dial down further if needed.
 RIGHT_OPEN_CONFIRM_SCANS = (
     3  # scans to fire when near dead-end (center_dist < RIGHT_OPEN_CLOSE_DIST)
 )

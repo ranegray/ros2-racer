@@ -440,10 +440,11 @@ class WallNavNode(Node):
             return
 
         # --- Front crash avoidance -----------------------------------------------
-        # Two diagonal rays at +/-front_avoid_deg measure wall angle:
-        #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right
-        #   asymmetry < 0                       ->  wall like /  ->  steer left
-        #   |asymmetry| small                   ->  flat wall    ->  ignore (below min_asym)
+        # Two diagonal rays at +/-front_avoid_deg measure wall angle.
+        # asymmetry = front_L - front_R (matches sign convention: sign*asym → correct angular.z):
+        #   gap on RIGHT  → front_R large → asymmetry negative → steer right ✓
+        #   gap on LEFT   → front_L large → asymmetry positive → steer left  ✓
+        #   |asymmetry| small             → flat wall          → ignore (below min_asym)
         # Gap path fires early (gap_detect_thresh) when one diagonal reads
         # significantly farther than fwd -- the open side IS the gap, steer into it.
         # Wall avoid path fires at front_avoid_thresh for non-gap walls.
@@ -504,7 +505,9 @@ class WallNavNode(Node):
             active_thresh = gap_detect_thresh if fire_gap else front_avoid_thresh
             proximity = max(0.0, 1.0 - fwd / active_thresh)
             avoid_speed = min(avoid_max_speed, max(v_min, v_max_v * (fwd / active_thresh)))
-            asymmetry = front_R - front_L
+            # front_L - front_R: gap on RIGHT → negative → sign*negative = positive angular.z → RIGHT ✓
+            #                    gap on LEFT  → positive → sign*positive = negative angular.z → LEFT  ✓
+            asymmetry = front_L - front_R
 
             # Clamp asymmetry before gains -- when one diagonal is open
             # space (substituted with range_max), raw asymmetry can be

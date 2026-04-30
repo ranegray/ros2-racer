@@ -146,7 +146,6 @@ def generate_launch_description():
                 executable="wall_nav_node",
                 name="wall_nav_node",
                 output="screen",
-                parameters=[{"forward_speed": 1.20}],
             ),
             # Path recorder — saves map→base_link poses to YAML on shutdown
             Node(
@@ -168,11 +167,6 @@ def generate_launch_description():
                 executable="pure_pursuit_node",
                 name="pure_pursuit_node",
                 output="screen",
-                parameters=[{
-                    "speed": 1.00,
-                    "lookahead": 0.5,
-                    "wheelbase": 0.165,
-                }],
             ),
             # Mode coordinator
             Node(

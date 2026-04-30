@@ -216,11 +216,6 @@ class WallNavNode(Node):
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
         self.declare_parameter("scan_dilation_deg", 15.0)
-        # Minimum fraction of rays in the -90 degree window that must be VALID
-        # for the perpendicular beam to be considered present. Below this
-        # threshold the beam is treated as NaN and wall_lost is declared.
-        # 0.05 = 95% of the window must be lost before committing a turn.
-        self.declare_parameter("ray_b_min_valid_fraction", 0.05)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -304,28 +299,18 @@ class WallNavNode(Node):
         return out
 
     def _ray_at_angle(
-        self,
-        msg: LaserScan,
-        target_angle: float,
-        half_window: float,
-        min_valid_fraction: float = 0.0,
+        self, msg: LaserScan, target_angle: float, half_window: float
     ) -> float:
-        """Mean of valid rays within `half_window` of `target_angle`.
-        Returns NaN if no valid rays exist, or if the fraction of valid rays
-        is below `min_valid_fraction` (e.g. 0.05 = wall_lost when 95%+ gone).
-        """
+        """Mean of valid rays within `half_window` of `target_angle`. NaN if none."""
         target = self._wrap(target_angle)
         readings = []
-        total = 0
         for i, r in enumerate(msg.ranges):
+            if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
+                continue
             angle = self._wrap(msg.angle_min + i * msg.angle_increment)
             if abs(self._wrap(angle - target)) <= half_window:
-                total += 1
-                if math.isfinite(r) and msg.range_min <= r <= msg.range_max:
-                    readings.append(r)
+                readings.append(r)
         if not readings:
-            return float("nan")
-        if min_valid_fraction > 0.0 and total > 0 and len(readings) / total < min_valid_fraction:
             return float("nan")
         return sum(readings) / len(readings)
 
@@ -357,9 +342,8 @@ class WallNavNode(Node):
         half = math.radians(self.get_parameter("ray_half_window_deg").value)
         L = self.get_parameter("look_ahead").value
 
-        min_valid_b = self.get_parameter("ray_b_min_valid_fraction").value
         a = self._ray_at_angle(msg, math.radians(ray_a_deg), half)
-        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half, min_valid_fraction=min_valid_b)
+        b = self._ray_at_angle(msg, math.radians(ray_b_deg), half)
         a_ok = math.isfinite(a)
         b_ok = math.isfinite(b)
 

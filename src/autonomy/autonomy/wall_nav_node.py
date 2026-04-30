@@ -416,6 +416,7 @@ class WallNavNode(Node):
         fwd = self._forward_distance(msg)
 
         v_min = self.get_parameter("min_forward_speed").value
+        v_max = self.get_parameter("forward_speed").value
         bias = self.get_parameter("steering_bias").value
         sign = self.get_parameter("steering_sign").value
         max_plausible = self.get_parameter("max_plausible_distance").value
@@ -671,7 +672,6 @@ class WallNavNode(Node):
         k_alpha = self.get_parameter("k_alpha").value
         k_yaw = self.get_parameter("k_yaw").value
         max_steer = self.get_parameter("max_steering").value
-        v_max = self.get_parameter("forward_speed").value
         alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         d_alpha = self.get_parameter("d_error_alpha").value
         max_error = self.get_parameter("max_error").value

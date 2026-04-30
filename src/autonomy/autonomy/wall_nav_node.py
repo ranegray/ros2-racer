@@ -227,12 +227,12 @@ class WallNavNode(Node):
         #   |asymmetry| < front_avoid_min_asym  ->  flat wall    ->  full-lock right
         # A gap filter skips avoid when a diagonal reads much farther than the
         # forward distance (doorway/window beside us), unless we are very close.
-        self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start checking
+        self.declare_parameter("front_avoid_thresh", 1.0)        # m -- start checking
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 1.2)
-        self.declare_parameter("front_avoid_kd", 2.5)
+        self.declare_parameter("front_avoid_kp", 0.6)
+        self.declare_parameter("front_avoid_kd", 2.0)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
         self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit

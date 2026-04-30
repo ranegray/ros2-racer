@@ -151,7 +151,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.25)
+        self.declare_parameter("min_forward_speed", 0.35)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
@@ -239,7 +239,7 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_kp", 0.3)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
-        self.declare_parameter("avoid_max_speed", 0.4)            # m/s cap during any avoid
+        self.declare_parameter("avoid_max_speed", 0.7)            # m/s cap during any avoid
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)

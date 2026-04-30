@@ -181,15 +181,14 @@ def generate_launch_description():
         output='log',
     )
 
-    # ── 6. Wall Follower ─────────────────────────────────────────────────────
+    # ── 6. Wall Nav (PD wall follower, Lap 1) ───────────────────────────────
     wall_follower_node = Node(
         package='autonomy',
-        executable='wall_follower_node',
-        name='wall_follower_node',
+        executable='wall_nav_node',
+        name='wall_nav_node',
         output='screen',
         condition=IfCondition(enable_lidar),
-        parameters=[{'speed_override': 1.1}],  # slow for mapping lap; set -1.0 to use BASE_SPEED
-        remappings=[('/scan', '/scan_filtered')],
+        parameters=[{'forward_speed': 1.0}],
     )
 
     # ── 6. Telemetry Aggregator ──────────────────────────────────────────────

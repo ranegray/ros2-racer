@@ -292,17 +292,20 @@ class WallFollowerNode(Node):
         Returns (D_ahead, alpha):
           alpha   — heading angle relative to right wall (0 = parallel, <0 = yawed toward wall)
           D_ahead — projected perpendicular distance LOOK_AHEAD metres ahead
-        Returns (nan, nan) when the perpendicular beam is missing.
+        Returns (nan, nan) when EITHER beam is missing. The diagonal beam is
+        the early-warning signal for a right-turn junction (it sweeps into the
+        opening before the perpendicular leaves the trailing side wall);
+        treating its loss as "all fine, alpha=0" silently swallowed the very
+        signal that should trigger turn-in. The RIGHT-GONE branch downstream
+        re-reads ray_a separately and correctly classifies NaN as open hallway.
         """
         a = self._ray_at_angle(
             msg, RAY_A_DEG, RAY_HALF_WIN_DEG
         )  # forward-right diagonal
         b = self._ray_at_angle(msg, RAY_B_DEG, RAY_HALF_WIN_DEG)  # perpendicular-right
 
-        if not math.isfinite(b):
+        if not math.isfinite(a) or not math.isfinite(b):
             return float("nan"), float("nan")
-        if not math.isfinite(a):
-            return b, 0.0  # perpendicular only: no angle, distance is b
 
         theta = abs(math.radians(RAY_B_DEG - RAY_A_DEG))
         alpha = math.atan2(a * math.cos(theta) - b, a * math.sin(theta))

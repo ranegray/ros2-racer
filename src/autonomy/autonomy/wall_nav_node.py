@@ -134,6 +134,10 @@ class WallNavNode(Node):
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
+        # Gap threading: narrow forward cone. If wall detected inside this
+        # distance, steer right until it clears.
+        self.declare_parameter("gap_fwd_deg", 4.0)
+        self.declare_parameter("gap_fwd_thresh", 2.0)
         self.declare_parameter("target_distance", 0.30)
         self.declare_parameter("forward_speed", 2.00)
         # Two-ray look-ahead estimator. Angles measured from the car's
@@ -160,7 +164,7 @@ class WallNavNode(Node):
         self.declare_parameter("steering_sign", -1.0)
         # Constant steering offset (in the *post-sign* frame) to trim a
         # mechanically off-centre servo.
-        self.declare_parameter("steering_bias", 0.25)
+        self.declare_parameter("steering_bias", 0.2)
         # Wall-loss handling. Doorways/windows lose the right wall
         # briefly; right-turn corners lose it for good. Coast straight
         # for `lost_coast_s` to clear short gaps, then commit a fixed-
@@ -433,6 +437,21 @@ class WallNavNode(Node):
             self.cmd_pub.publish(Twist())
             return
 
+        # --- Gap threading -------------------------------------------------------
+        # Narrow ±gap_fwd_deg cone straight ahead. If a wall is within
+        # gap_fwd_thresh, steer right until the cone clears. Robot
+        # naturally threads gaps by turning toward open space.
+        gap_fwd_thresh = self.get_parameter("gap_fwd_thresh").value
+        gap_fwd_half = math.radians(self.get_parameter("gap_fwd_deg").value)
+        gap_fwd = self._ray_at_angle(msg, 0.0, gap_fwd_half)
+        if math.isfinite(gap_fwd) and gap_fwd < gap_fwd_thresh:
+            cmd = Twist()
+            cmd.linear.x = 0.4
+            cmd.angular.z = float(self.get_parameter("max_steering").value)  # full-lock RIGHT
+            self.cmd_pub.publish(cmd)
+            self.get_logger().info(f"GAP fwd_narrow={gap_fwd:.2f}m — steering right")
+            return
+
         # --- Front crash avoidance -----------------------------------------------
         # Two diagonal rays at +/-front_avoid_deg measure wall angle.
         # asymmetry = front_L - front_R (matches sign convention: sign*asym → correct angular.z):
@@ -476,13 +495,9 @@ class WallNavNode(Node):
             max_steer_v = self.get_parameter("max_steering").value
             proximity = max(0.0, 1.0 - fwd / front_avoid_thresh)
             avoid_speed = min(avoid_max_speed, max(v_min, v_max * (fwd / front_avoid_thresh)))
-            # front_L - front_R: more room on RIGHT → negative → sign*negative = positive angular.z → steer RIGHT ✓
-            asymmetry = front_L - front_R
-
-            # Clamp asymmetry before gains -- when one diagonal is open
-            # space (substituted with range_max), raw asymmetry can be
-            # 7+ m and blow up the steer command. Cap at +-2m so the
-            # gains stay in a sensible range regardless of corridor width.
+            # front_R - front_L: wall on LEFT (/) → positive → steer RIGHT ✓
+            #                    wall on RIGHT (\) → negative → steer LEFT ✓
+            asymmetry = front_R - front_L
             asymmetry = max(-2.0, min(2.0, asymmetry))
             raw_d_asym = asymmetry - self._prev_asymmetry
             d_asym = (
@@ -497,7 +512,6 @@ class WallNavNode(Node):
                     - avoid_kd * d_asym
                 )
                 avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
-                avoid_steer = sign * avoid_steer + bias
                 self._avoid_confirm = 0
                 cmd = Twist()
                 cmd.linear.x = float(avoid_speed)

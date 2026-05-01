@@ -31,6 +31,7 @@ setup(
             'stop_sign_node = stop_sign.stop_sign_node:main',
             'stop_sign_visualizer = stop_sign.visualizer:main',
             'stop_sign_snapshot = stop_sign.snapshot:main',
+            'cmd_vel_stop_filter = stop_sign.cmd_vel_filter_node:main',
         ],
     },
 )

@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
 """
-Launch file for line following behavior.
+Launch file for line following behavior with stop-sign obedience.
 
-Launches:
-    rs_stream -> line_detector -> line_control -> rover_node
-              \\-> stop_sign_node (publishes /stop_sign/event for line_control)
+Pipeline:
+    rs_stream → line_detector ──► line_control ──► /cmd_vel_raw ─┐
+                              │                                  │
+                              └─► stop_sign_node ──/stop_sign/event─┐
+                                                                    │
+                                            cmd_vel_stop_filter ────┘
+                                                  │
+                                                  ▼
+                                              /cmd_vel ─► rover_node
 
-Pass obey_stops:=false to ignore stop signs (lap-timing runs):
+`line_control` is unchanged — its `cmd_vel` topic is remapped to `cmd_vel_raw`
+in the launch wiring. `cmd_vel_stop_filter` adds the DRIVING/BRAKING/STOPPED/
+RESUMING state machine on top, modulating `linear.x` only. Steering passes
+through untouched.
+
+Pass obey_stops:=false to skip the stop sequence (lap-timing runs):
     ros2 launch ros2-racer line_follow_launch.py obey_stops:=false
+
+When `obey_stops` is false the filter is a pure pass-through: every Twist
+field byte-for-byte from `cmd_vel_raw` to `cmd_vel`. Toggle live with:
+    ros2 param set /cmd_vel_stop_filter obey_stops false
 """
 import os
 
@@ -44,7 +59,7 @@ def generate_launch_description():
             "obey_stops",
             default_value="true",
             description="Obey stop signs detected by stop_sign_node. "
-                        "Set false for lap-timing runs.",
+                        "Set false for lap-timing runs (filter becomes pure pass-through).",
         ),
 
         # RealSense camera stream
@@ -55,7 +70,7 @@ def generate_launch_description():
             output="screen",
         ),
 
-        # Line detector
+        # Line detector — publishes the line follow/turn/lookahead points
         Node(
             package="perception",
             executable="line_detector",
@@ -72,13 +87,23 @@ def generate_launch_description():
             parameters=[{"config_path": stop_sign_config}],
         ),
 
-        # Line following controller (subscribes /stop_sign/event)
+        # Line following controller — publishes to cmd_vel_raw (remapped)
         Node(
             package="line_control",
             executable="line_control",
             name="line_control",
             output="screen",
+            remappings=[("cmd_vel", "cmd_vel_raw")],
+        ),
+
+        # cmd_vel filter — applies stop-sign state machine, republishes to cmd_vel
+        Node(
+            package="stop_sign",
+            executable="cmd_vel_stop_filter",
+            name="cmd_vel_stop_filter",
+            output="screen",
             parameters=[{"obey_stops": obey_stops}],
+            respawn=True,
         ),
 
         # Rover driver

@@ -625,3 +625,57 @@
     overflow: auto;
   }
 }
+
+/* Path Inspector */
+.path-inspector-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.path-file-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.path-file-btn:hover { background: var(--accent-border); }
+
+.path-action-btn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.path-action-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.path-action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.path-action-btn.path-action-secondary { color: #94a3b8; }
+
+.path-inspector-stats {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #00e5ff;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.path-inspector-panel .map-frame {
+  width: min(100%, 380px, 32vh);
+  margin-inline: auto;
+}

@@ -9,6 +9,7 @@ import { LapLog } from "./components/LapLog";
 import { LidarCharts } from "./components/LidarCharts";
 import { LidarPolar } from "./components/LidarPolar";
 import { MapPanel } from "./components/MapPanel";
+import { PathInspectorPanel } from "./components/PathInspectorPanel";
 import { RawJson } from "./components/RawJson";
 import { SpeedPanel } from "./components/SpeedPanel";
 import { StatusTiles } from "./components/StatusTiles";
@@ -597,6 +598,7 @@ function App() {
                     format={lineDebugFormat}
                     arrivedAt={lineDebugArrivedAt}
                 />
+                <PathInspectorPanel />
             </div>
 
             <RawJson msg={latest} />

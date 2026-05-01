@@ -10,6 +10,7 @@ Default output: ~/.ros/recorded_path.yaml
 Override with ROS parameter: output_path
 """
 
+import math
 import os
 import yaml
 import rclpy
@@ -106,10 +107,35 @@ class PathRecorderNode(Node):
             pub_msg.data = "saved"
             self._path_saved_pub.publish(pub_msg)
 
+    def _close_loop(self):
+        """Interpolate waypoints between the last and first pose to close the path."""
+        if len(self._poses) < 2:
+            return
+        last  = self._poses[-1]
+        first = self._poses[0]
+        gap = math.hypot(first['x'] - last['x'], first['y'] - last['y'])
+        if gap < MIN_DIST:
+            return
+        n_steps = max(1, int(gap / MIN_DIST))
+        closing = []
+        for i in range(1, n_steps):
+            t = i / n_steps
+            closing.append({
+                'x':  float(last['x']  + t * (first['x']  - last['x'])),
+                'y':  float(last['y']  + t * (first['y']  - last['y'])),
+                'qz': float(last['qz']),
+                'qw': float(last['qw']),
+            })
+        self._poses.extend(closing)
+        self.get_logger().info(
+            f"Loop closure: added {len(closing)} waypoints to bridge {gap:.2f}m gap"
+        )
+
     def _save(self):
         if not self._poses:
             self.get_logger().warn("No poses recorded — nothing to save")
             return
+        self._close_loop()
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
         with open(self._output_path, "w") as f:
             yaml.dump({"poses": self._poses}, f)

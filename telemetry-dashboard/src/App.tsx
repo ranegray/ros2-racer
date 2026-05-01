@@ -539,8 +539,6 @@ function App() {
             />
 
             <div className="dashboard-grid">
-                <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
-                <LidarCharts lidarSamples={lidarSamples} telSamples={samples} />
                 <MapPanel
                     map={map}
                     arrivedAt={mapArrivedAt}
@@ -548,6 +546,8 @@ function App() {
                     inflatedMap={inflatedMap}
                     recordedPath={recordedPath}
                 />
+                <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
+                <LidarCharts lidarSamples={lidarSamples} telSamples={samples} />
                 <Charts samples={samples} />
                 <LapLog
                     lapTimes={lapTimes}

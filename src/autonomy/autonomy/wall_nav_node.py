@@ -88,7 +88,7 @@ class WallNavNode(Node):
         # command (rover_node maps it as angular.z * 500 clipped to +/-1000,
         # so +/-2 = full lock). Gains are tuned for that, not for rad/s.
         self.declare_parameter("kp", 0.4)
-        self.declare_parameter("kd", 0.2)
+        self.declare_parameter("kd", 2.0)
         # alpha-feedback: counteracts the car's yaw toward/away from the wall
         # on straights AND helps drive turn-in as the wall starts bending
         # away through a corner. Final command:
@@ -136,7 +136,7 @@ class WallNavNode(Node):
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.6)
-        self.declare_parameter("forward_speed", 1.1)
+        self.declare_parameter("forward_speed", 1.2)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0 degrees), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.
@@ -151,7 +151,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.25)
+        self.declare_parameter("min_forward_speed", 0.3)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)

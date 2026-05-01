@@ -136,7 +136,7 @@ class WallNavNode(Node):
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
         self.declare_parameter("target_distance", 0.3)
-        self.declare_parameter("forward_speed", 1.00)
+        self.declare_parameter("forward_speed", 1.5)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0 degrees), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.
@@ -228,12 +228,12 @@ class WallNavNode(Node):
         #   |asymmetry| < front_avoid_min_asym  ->  flat wall    ->  full-lock right
         # A gap filter skips avoid when a diagonal reads much farther than the
         # forward distance (doorway/window beside us), unless we are very close.
-        self.declare_parameter("front_avoid_thresh", 2.8)        # m -- start checking
+        self.declare_parameter("front_avoid_thresh", 2.0)        # m -- start checking
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
         self.declare_parameter("front_avoid_kp", 1.8)
-        self.declare_parameter("front_avoid_kd", 2.5)
+        self.declare_parameter("front_avoid_kd", 3.5)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
         self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit

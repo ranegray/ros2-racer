@@ -6,7 +6,7 @@ import { LidarPolar } from './components/LidarPolar'
 import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { CompressedImage, LaserScan, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
+import type { CompressedImage, LaserScan, Odometry, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
 import { BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
@@ -60,6 +60,10 @@ function App() {
   const [inflatedMap, setInflatedMap] = useState<OccupancyGrid | null>(null)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
+  const [lapStartMs, setLapStartMs] = useState<number | null>(null)
+  const [lapElapsedMs, setLapElapsedMs] = useState(0)
+  const lapStartMsRef = useRef<number | null>(null)
+  lapStartMsRef.current = lapStartMs
   const bufferRef = useRef<Sample[]>([])
   // Camera frames bypass React state: at 30 Hz, routing ~20 KB Uint8Arrays
   // through setState ramps Chrome's tab memory by tens of MB/s (off-heap,
@@ -211,6 +215,22 @@ function App() {
       setInflatedMap(raw as unknown as OccupancyGrid)
     })
 
+    const odomTopic = new ROSLIB.Topic({
+      ros,
+      name: '/odom_rf2o',
+      messageType: 'nav_msgs/msg/Odometry',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 100,
+    })
+    odomTopic.subscribe((raw) => {
+      const msg = raw as unknown as Odometry
+      const vx = msg.twist?.twist?.linear?.x ?? 0
+      if (Math.abs(vx) > 0.05 && lapStartMsRef.current === null) {
+        setLapStartMs(Date.now())
+      }
+    })
+
     return () => {
       disposed = true
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
@@ -221,6 +241,7 @@ function App() {
       mapTopic.unsubscribe()
       plannedPathTopic.unsubscribe()
       inflatedMapTopic.unsubscribe()
+      odomTopic.unsubscribe()
       ros.close()
     }
   }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
@@ -229,6 +250,12 @@ function App() {
     const id = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (lapStartMs === null) return
+    const id = window.setInterval(() => setLapElapsedMs(Date.now() - lapStartMs), 100)
+    return () => window.clearInterval(id)
+  }, [lapStartMs])
 
   const telemetryStale =
     telemetryArrivedAt === 0 || now - telemetryArrivedAt > TELEMETRY_STALE_MS
@@ -253,7 +280,12 @@ function App() {
         </div>
       </header>
 
-      <StatusTiles connected={connected} latest={latest} />
+      <StatusTiles
+        connected={connected}
+        latest={latest}
+        lapMs={lapStartMs !== null ? lapElapsedMs : null}
+        onLapReset={() => { setLapStartMs(null); setLapElapsedMs(0) }}
+      />
 
       <div className="dashboard-grid">
         <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />

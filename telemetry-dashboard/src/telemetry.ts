@@ -36,6 +36,11 @@ export type RacerTelemetry = {
   obstacle_detection: string
 }
 
+export type Odometry = {
+  header: { stamp: RosTime; frame_id: string }
+  twist: { twist: { linear: RosVec3; angular: RosVec3 } }
+}
+
 export type RosPoint2D = { x: number; y: number }
 
 export type RosPath = {

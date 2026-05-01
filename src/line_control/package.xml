@@ -1,20 +1,11 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>autonomy</name>
+  <name>line_control</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="avery.wagner@colorado.edu">student</maintainer>
+  <description>Line-following controller driven by perception/line_detector</description>
+  <maintainer email="justincosta10@gmail.com">pi</maintainer>
   <license>TODO: License declaration</license>
-
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>slam_toolbox</exec_depend>
-  <exec_depend>python3-scipy</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

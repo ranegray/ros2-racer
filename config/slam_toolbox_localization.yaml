@@ -1,0 +1,39 @@
+slam_toolbox:
+  ros__parameters:
+    # Solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+
+    # Frames
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_filtered
+
+    # Mode: localize against a pre-built map — DO NOT modify the map
+    mode: localization
+
+    # Map to load — update this path before Lap 2
+    # Save it after Lap 1 with:
+    #   ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: '/home/pi/map/track'}}"
+    # Then set this to the saved map's full path (without extension):
+    map_file_name: "/home/pi/map/track"
+    map_start_at_dock: false
+
+    # Scan matching (same settings as mapping for consistency)
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.05
+    minimum_travel_heading: 0.1
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    do_loop_closing: false        # map is frozen
+
+    # TF / timing
+    tf_buffer_duration: 30.0
+    transform_publish_period: 0.02
+    minimum_time_interval: 0.1

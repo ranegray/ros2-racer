@@ -9,7 +9,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
+from nav_msgs.msg import Odometry
 import time
 import threading
 from pymavlink import mavutil
@@ -26,13 +27,36 @@ class ArduPilotRoverNode(Node):
         self.declare_parameter('baud_rate', 115200)
         self.declare_parameter('control_frequency', 20.0)
         self.declare_parameter('imu_frequency', 20.0)
-        
+
+        # Closed-loop velocity control. Setpoint is cmd_vel.linear.x in m/s,
+        # feedback is twist.linear.x from the rf2o LIDAR-odometry topic.
+        self.declare_parameter('use_velocity_feedback', True)
+        self.declare_parameter('odom_topic', '/odom_rf2o')
+        self.declare_parameter('kp_speed', 220.0)        # MAVLink throttle units / (m/s)
+        self.declare_parameter('ki_speed', 150.0)        # MAVLink throttle units / (m/s * s)
+        self.declare_parameter('max_speed', 1.5)         # m/s setpoint clamp
+        self.declare_parameter('max_throttle', 300)      # MAVLink throttle clamp
+        self.declare_parameter('odom_stale_sec', 0.5)    # refuse to drive if feedback older than this
+        # Setpoint slew limit. Without this, a sudden cmd_vel step (0 -> 0.5 m/s)
+        # gives the integrator a huge initial error to chew on while the rover
+        # is still breaking stiction; by the time the wheels move the integrator
+        # has wound up far past what's needed and the loop overshoots.
+        self.declare_parameter('max_accel', 1.0)         # m/s^2 cap on rate of change of target_speed
+
         # Get parameters
         self.connection_string = self.get_parameter('connection_string').value
         self.baud_rate = self.get_parameter('baud_rate').value
         self.control_freq = self.get_parameter('control_frequency').value
         self.imu_freq = self.get_parameter('imu_frequency').value
-        
+        self.use_velocity_feedback = bool(self.get_parameter('use_velocity_feedback').value)
+        self.odom_topic = str(self.get_parameter('odom_topic').value)
+        self.kp_speed = float(self.get_parameter('kp_speed').value)
+        self.ki_speed = float(self.get_parameter('ki_speed').value)
+        self.max_speed = float(self.get_parameter('max_speed').value)
+        self.max_throttle = int(self.get_parameter('max_throttle').value)
+        self.odom_stale_sec = float(self.get_parameter('odom_stale_sec').value)
+        self.max_accel = float(self.get_parameter('max_accel').value)
+
         # Control variables
         self.default_throttle = 0.0
         self.default_steering = 0.0
@@ -40,7 +64,14 @@ class ArduPilotRoverNode(Node):
         self.current_steering = self.default_steering
         self.last_cmd_time = time.time()
         self.cmd_timeout = 1.0  # 1 second timeout for commands
-        
+
+        # Velocity loop state
+        self.target_speed_raw = 0.0   # m/s, signed; latest cmd_vel.linear.x (clamped)
+        self.target_speed = 0.0       # m/s, signed; slewed setpoint that the PI sees
+        self.measured_speed = 0.0     # m/s, signed; from /odom_rf2o
+        self.last_odom_time = 0.0     # wall-time of latest odom sample (0 = never)
+        self.speed_integral = 0.0     # PI integral term, MAVLink throttle units
+
         # Connection variables
         self.master = None
         self.connected = False
@@ -63,10 +94,22 @@ class ArduPilotRoverNode(Node):
         self.gyro_pub = self.create_publisher(Vector3, 'imu/gyro', sensor_qos)
         self.accel_pub = self.create_publisher(Vector3, 'imu/accel', sensor_qos)
         self.armed_pub = self.create_publisher(Bool, 'rover/armed', control_qos)
-        
+        # Velocity-loop telemetry. Always published so you can compare measured
+        # vs setpoint in the dashboard regardless of whether the loop is active.
+        self.speed_pub = self.create_publisher(Float32, 'rover/speed', sensor_qos)
+        self.speed_target_pub = self.create_publisher(Float32, 'rover/speed_target', sensor_qos)
+
         # Subscribers
         self.cmd_sub = self.create_subscription(
             Twist, 'cmd_vel', self.cmd_vel_callback, control_qos)
+        # rf2o publishes /odom_rf2o as RELIABLE/VOLATILE — match it exactly.
+        odom_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            depth=5,
+        )
+        self.odom_sub = self.create_subscription(
+            Odometry, self.odom_topic, self.odom_callback, odom_qos)
         
         # Timers
         self.control_timer = self.create_timer(
@@ -225,55 +268,134 @@ class ArduPilotRoverNode(Node):
             self.get_logger().error(f'Failed to request IMU data: {e}')
     
     def cmd_vel_callback(self, msg):
-        """Handle incoming velocity commands"""
-        # Convert Twist message to throttle and steering
-        # msg.linear.x: forward/backward speed (-1.0 to 1.0)
-        # msg.angular.z: turning rate (-2.0 to 2.0)
-        
-        # adds offset to throttle to make it act more linear
-        throttle_raw = msg.linear.x * -400
-        offset = 80
+        """Handle incoming velocity commands.
 
-        if throttle_raw >= 0:
-            throttle_with_offset = throttle_raw + offset
-        else:
-            throttle_with_offset = throttle_raw - offset
+        With use_velocity_feedback=True, msg.linear.x is interpreted as a
+        signed target speed in m/s and the PI controller in control_loop()
+        chooses the throttle that achieves it.
 
-        # Scale to MAVLink range (-1000 to 1000)
-        self.current_throttle = int(np.clip(throttle_with_offset, -300, 300))
-
+        With use_velocity_feedback=False (legacy), msg.linear.x is treated
+        as a normalized throttle in [-1, 1] and mapped directly to MAVLink
+        throttle units with a stiction offset.
+        """
+        # Steering mapping is unchanged in both modes.
         self.current_steering = int(np.clip(msg.angular.z * 500, -1000, 1000))
-        
         self.last_cmd_time = time.time()
-        
-        self.get_logger().debug(
-            f'Received cmd_vel: throttle={self.current_throttle}, '
-            f'steering={self.current_steering}'
-        )
+
+        # Closed-loop setpoint (clamped to safe range). The slew limiter in
+        # control_loop ramps self.target_speed toward this value at max_accel.
+        self.target_speed_raw = float(np.clip(msg.linear.x, -self.max_speed, self.max_speed))
+
+        if not self.use_velocity_feedback:
+            # Legacy open-loop mapping (preserved verbatim).
+            throttle_raw = msg.linear.x * -400
+            offset = 80
+            if throttle_raw >= 0:
+                throttle_with_offset = throttle_raw + offset
+            else:
+                throttle_with_offset = throttle_raw - offset
+            self.current_throttle = int(np.clip(throttle_with_offset, -300, 300))
+
+    def odom_callback(self, msg):
+        """Cache the latest velocity feedback from rf2o (or any nav_msgs/Odometry)."""
+        self.measured_speed = float(msg.twist.twist.linear.x)
+        self.last_odom_time = time.time()
+
+    def _velocity_pi_step(self, setpoint, measured, dt):
+        """One step of PI control with conditional-integration anti-windup.
+
+        Sign convention: positive setpoint = forward. The rover's throttle
+        channel is wired inverted, so forward motion requires NEGATIVE
+        MAVLink throttle. We compute the natural-sign PI law and negate.
+
+        Anti-windup: tentatively integrate, compute output, clamp. Only
+        commit the new integral if integrating did not push the output
+        further past the saturation limit.
+        """
+        error = setpoint - measured
+        new_integral = self.speed_integral + error * dt
+        natural_out = self.kp_speed * error + self.ki_speed * new_integral
+        raw = -natural_out  # apply throttle inversion
+        clamped = float(np.clip(raw, -self.max_throttle, self.max_throttle))
+
+        # Freeze integration only when saturated AND error would push deeper
+        # past the clamp. Equivalent to (raw-clamped)*error >= 0.
+        if (raw - clamped) * error >= 0:
+            self.speed_integral = new_integral
+
+        return int(clamped)
     
     def control_loop(self):
-        """Main control loop - sends commands at fixed rate"""
+        """Main control loop - sends commands at fixed rate."""
         if not self.connected or not self.armed:
             return
-        
-        # Check for command timeout
-        if time.time() - self.last_cmd_time > self.cmd_timeout:
-            # Use default values if no recent commands
-            throttle = int(self.default_throttle * 1000)
-            steering = int(self.default_steering * 1000)
+
+        timed_out = (time.time() - self.last_cmd_time) > self.cmd_timeout
+
+        if self.use_velocity_feedback:
+            # ---- Closed-loop velocity control ----
+            # Slew the setpoint toward the latest commanded value (or zero on
+            # watchdog timeout) at max_accel. This caps how fast the PI's
+            # error term can grow, which prevents integrator windup at startup
+            # and gives a smooth ramp instead of a step into max throttle.
+            dt = 1.0 / self.control_freq
+            desired_target = 0.0 if timed_out else self.target_speed_raw
+            max_step = self.max_accel * dt
+            self.target_speed += float(np.clip(
+                desired_target - self.target_speed, -max_step, max_step))
+            setpoint = self.target_speed
+
+            # Stale-feedback guard: if rf2o stopped publishing, refuse to
+            # drive. The integrator would otherwise wind up to max throttle
+            # while measured_speed stays at its last (likely wrong) value.
+            odom_age = time.time() - self.last_odom_time
+            if self.last_odom_time == 0.0 or odom_age > self.odom_stale_sec:
+                self.speed_integral = 0.0
+                throttle = 0
+                steering = 0
+                self.get_logger().warning(
+                    f'No fresh {self.odom_topic} (age={odom_age:.2f}s); '
+                    f'velocity loop holding zero.',
+                    throttle_duration_sec=2.0,
+                )
+            else:
+                throttle = self._velocity_pi_step(setpoint, self.measured_speed, dt)
+                steering = 0 if timed_out else self.current_steering
+
+            # Telemetry
+            sp_msg = Float32()
+            sp_msg.data = float(self.measured_speed)
+            self.speed_pub.publish(sp_msg)
+            tgt_msg = Float32()
+            tgt_msg.data = float(setpoint)
+            self.speed_target_pub.publish(tgt_msg)
         else:
-            throttle = self.current_throttle
-            steering = self.current_steering
-        
+            # ---- Legacy open-loop path (unchanged behaviour) ----
+            if timed_out:
+                throttle = int(self.default_throttle * 1000)
+                steering = int(self.default_steering * 1000)
+            else:
+                throttle = self.current_throttle
+                steering = self.current_steering
+
+            # Still publish telemetry for monitoring.
+            if self.last_odom_time != 0.0:
+                sp_msg = Float32()
+                sp_msg.data = float(self.measured_speed)
+                self.speed_pub.publish(sp_msg)
+            tgt_msg = Float32()
+            tgt_msg.data = float(self.target_speed_raw)
+            self.speed_target_pub.publish(tgt_msg)
+
         # Send manual control command
         try:
             self.master.mav.manual_control_send(
                 self.master.target_system,
-                0,      
-                steering,    
-                throttle,      
-                0,           
-                0            
+                0,
+                steering,
+                throttle,
+                0,
+                0,
             )
         except Exception as e:
             self.get_logger().error(f'Failed to send control command: {e}')

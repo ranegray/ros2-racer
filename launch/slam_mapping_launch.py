@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""
+slam_mapping_launch.py  —  Lap 1: build the map while wall-following.
+
+ros2 launch launch/slam_mapping_launch.py serial_port:=/dev/ttyLIDAR
+
+
+Nodes launched:
+  rplidar_ros   rplidar_node       /scan
+  autonomy      odometry_node      /odom + TF odom→base_link
+  autonomy      imu_adapter_node   /imu
+  slam_toolbox  async_slam_toolbox /map + TF map→odom
+  autonomy      wall_nav_node      /cmd_vel (PD wall follower)
+  autonomy      path_recorder_node records map→base_link poses to YAML
+  autonomy      slam_coordinator   /slam_coordinator/mode
+  robo_rover    rover_node         MAVLink driver
+
+Static TFs (YOU MUST MEASURE these on the actual rover):
+  odom → base_link  provided by odometry_node at runtime
+  base_link → laser  static: adjust x/y/z to lidar mounting position
+
+After Lap 1, save the map:
+  ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
+    "{name: {data: '/home/pi/map/track'}}"
+Then kill this launch and run slam_racing_launch.py.
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import AnyLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+from launch import LaunchDescription
+
+
+def generate_launch_description():
+    connection_string = LaunchConfiguration("connection_string", default="/dev/ttyACM1")
+    baud_rate = LaunchConfiguration("baud_rate", default="115200")
+    wheelbase = LaunchConfiguration("wheelbase", default="0.25")
+
+    slam_config = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config",
+        "slam_toolbox_mapping.yaml",
+    )
+
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("connection_string", default_value="/dev/ttyACM1"),
+            DeclareLaunchArgument("baud_rate", default_value="115200"),
+            DeclareLaunchArgument(
+                "wheelbase",
+                default_value="0.165",
+                description="Rover wheelbase in metres",
+            ),
+            # Scan filter — fills narrow max-range gaps (glass/windows) before
+            # slam_toolbox and wall_follower see the data.
+            Node(
+                package="perception",
+                executable="scan_filter_node",
+                name="scan_filter_node",
+                output="screen",
+                parameters=[{"max_gap_deg": 30.0}],
+            ),
+            # RPLIDAR A1 — publishes /scan with frame_id=laser
+            # respawn=True: LIDAR stays in scan mode after Ctrl+C; first attempt
+            # sends reset but times out, second attempt succeeds automatically.
+            Node(
+                package="rplidar_ros",
+                executable="rplidar_node",
+                name="rplidar_node",
+                output="screen",
+                respawn=True,
+                respawn_delay=2.0,
+                parameters=[
+                    {
+                        "channel_type": "serial",
+                        "serial_port": "/dev/ttyLIDAR",
+                        "serial_baudrate": 115200,
+                        "frame_id": "laser",
+                        "inverted": False,
+                        "angle_compensate": True,
+                    }
+                ],
+            ),
+            # Static TF: base_link → laser
+            # base_link = rear axle center at ground level.
+            # Lidar: 0.05 m ahead of rear axle, centered, 0.19 m above ground.
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="base_link_to_laser",
+                arguments=[
+                    "0.05",
+                    "0.0",
+                    "0.19",
+                    "0.0",
+                    "0.0",
+                    "0.0",
+                    "base_link",
+                    "laser",
+                ],
+                output="screen",
+            ),
+            # IMU adapter: imu/gyro + imu/accel → /imu
+            Node(
+                package="autonomy",
+                executable="imu_adapter_node",
+                name="imu_adapter_node",
+                output="screen",
+            ),
+            # rf2o laser odometry — owns the odom→base_link TF.
+            # Laser-derived odom is far more accurate than cmd_vel dead-reckoning
+            # (no tire slip, no wheelbase error) so slam_toolbox gets a better
+            # prior before scan matching, and the map builds cleaner.
+            Node(
+                package="rf2o_laser_odometry",
+                executable="rf2o_laser_odometry_node",
+                name="rf2o_laser_odometry",
+                parameters=[{
+                    "laser_scan_topic": "/scan",
+                    "odom_topic": "/odom_rf2o",
+                    "publish_tf": True,
+                    "base_frame_id": "base_link",
+                    "odom_frame_id": "odom",
+                    "init_pose_from_topic": "",
+                    "freq": 10.0,
+                }],
+                ros_arguments=["--log-level", "rf2o_laser_odometry:=FATAL"],
+                output="log",
+            ),
+            # slam_toolbox online async mapping
+            Node(
+                package="slam_toolbox",
+                executable="async_slam_toolbox_node",
+                name="slam_toolbox",
+                output="screen",
+                parameters=[slam_config],
+            ),
+            # Wall nav — Lap 1 driver (PD wall follower, subscribes to /scan directly)
+            Node(
+                package="autonomy",
+                executable="wall_nav_node",
+                name="wall_nav_node",
+                output="screen",
+            ),
+            # Path recorder — saves map→base_link poses to YAML on shutdown
+            Node(
+                package="autonomy",
+                executable="path_recorder_node",
+                name="path_recorder_node",
+                output="screen",
+            ),
+            # Path planner — waits for "ready"/"racing" mode, then A* plans on the built map
+            Node(
+                package="autonomy",
+                executable="path_planner_node",
+                name="path_planner_node",
+                output="screen",
+            ),
+            # Pure pursuit — inactive until coordinator publishes "racing" mode
+            Node(
+                package="autonomy",
+                executable="pure_pursuit_node",
+                name="pure_pursuit_node",
+                output="screen",
+            ),
+            # Mode coordinator
+            Node(
+                package="autonomy",
+                executable="slam_coordinator_node",
+                name="slam_coordinator_node",
+                output="screen",
+            ),
+            # Rover MAVLink driver
+            Node(
+                package="robo_rover",
+                executable="rover_node",
+                name="rover_node",
+                output="screen",
+                emulate_tty=True,
+                parameters=[
+                    {
+                        "connection_string": connection_string,
+                        "baud_rate": baud_rate,
+                        "control_frequency": 20.0,
+                        "imu_frequency": 20.0,
+                        "use_velocity_feedback": True,
+                        "kp_speed": 120.0,
+                        "ki_speed": 60.0,
+                    }
+                ],
+            ),
+            # rosbridge WebSocket — lets the React dashboard subscribe to /map, /scan, etc.
+            IncludeLaunchDescription(
+                AnyLaunchDescriptionSource(
+                    os.path.join(
+                        get_package_share_directory("rosbridge_server"),
+                        "launch",
+                        "rosbridge_websocket_launch.xml",
+                    )
+                )
+            ),
+        ]
+    )

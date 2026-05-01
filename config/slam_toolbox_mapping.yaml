@@ -1,0 +1,42 @@
+slam_toolbox:
+  ros__parameters:
+    # Solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+
+    # Frames
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_filtered
+
+    # Mode: build a new map from scratch
+    mode: mapping
+
+    # Map parameters
+    resolution: 0.05              # 5 cm/cell — good for hallway features
+    max_laser_range: 8.0          # RPLIDAR A1 max ~8 m
+
+    # Scan matching — tuned to favour scan matching over odometry.
+    # rf2o now provides odom TF so the prior is already good; these settings
+    # make slam_toolbox match aggressively and loop-close tightly.
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.02   # match every ~2 cm (was 5 cm)
+    minimum_travel_heading: 0.05    # match every ~3 deg heading change (was 0.1)
+    scan_buffer_size: 20            # more scans available for matching (was 10)
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.05  # accept lower-quality matches (was 0.1)
+    link_scan_maximum_distance: 2.0         # match against scans up to 2 m back (was 1.5)
+    do_loop_closing: true
+
+    # TF / timing
+    tf_buffer_duration: 30.0
+    transform_publish_period: 0.02
+    minimum_time_interval: 0.1
+
+    # Map save (empty = don't auto-save; save manually via service call)
+    map_file_name: ""
+    map_start_pose: [0.0, 0.0, 0.0]

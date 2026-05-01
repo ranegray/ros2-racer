@@ -3,9 +3,10 @@ import * as ROSLIB from 'roslib'
 import { CameraPanel } from './components/CameraPanel'
 import { Charts } from './components/Charts'
 import { LidarPolar } from './components/LidarPolar'
+import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { CompressedImage, LaserScan, RacerTelemetry, Sample } from './telemetry'
+import type { CompressedImage, LaserScan, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
 import { BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
@@ -42,13 +43,21 @@ function App() {
   const [disableCamera] = useState(() => hasFlag('nocam'))
   const [disableScan] = useState(() => hasFlag('noscan'))
   const [disableTelemetry] = useState(() => hasFlag('notel'))
+  const [disableLineDebug] = useState(() => hasFlag('nolinedbg'))
   const [connected, setConnected] = useState(false)
   const [latest, setLatest] = useState<RacerTelemetry | null>(null)
   const [samples, setSamples] = useState<Sample[]>([])
   const [imageArrivedAt, setImageArrivedAt] = useState(0)
   const [imageFormat, setImageFormat] = useState<string | null>(null)
+  const [lineDebugArrivedAt, setLineDebugArrivedAt] = useState(0)
+  const [lineDebugFormat, setLineDebugFormat] = useState<string | null>(null)
   const [scan, setScan] = useState<LaserScan | null>(null)
   const [scanArrivedAt, setScanArrivedAt] = useState(0)
+  const [map, setMap] = useState<OccupancyGrid | null>(null)
+  const [mapArrivedAt, setMapArrivedAt] = useState(0)
+  const [plannedPath, setPlannedPath] = useState<RosPath | null>(null)
+  const [recordedPath, setRecordedPath] = useState<RosPath | null>(null)
+  const [inflatedMap, setInflatedMap] = useState<OccupancyGrid | null>(null)
   const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const bufferRef = useRef<Sample[]>([])
@@ -58,6 +67,7 @@ function App() {
   // across renders). CameraPanel registers a paint fn here on mount and we
   // call it synchronously from the subscribe callback.
   const cameraPaintRef = useRef<((raw: CompressedImage) => void) | null>(null)
+  const lineDebugPaintRef = useRef<((raw: CompressedImage) => void) | null>(null)
 
   useEffect(() => {
     const ros = new ROSLIB.Ros({ url: rosUrl })
@@ -120,6 +130,23 @@ function App() {
       setImageFormat((prev) => (prev === msg.format ? prev : msg.format))
     })
 
+    const lineDebugTopic = disableLineDebug
+      ? null
+      : new ROSLIB.Topic({
+          ros,
+          name: '/telemetry/line_debug',
+          messageType: 'sensor_msgs/msg/CompressedImage',
+          compression: 'cbor',
+          queue_length: 1,
+          throttle_rate: 0,
+        })
+    lineDebugTopic?.subscribe((raw) => {
+      const msg = raw as unknown as CompressedImage
+      lineDebugPaintRef.current?.(msg)
+      setLineDebugArrivedAt(Date.now())
+      setLineDebugFormat((prev) => (prev === msg.format ? prev : msg.format))
+    })
+
     const scanTopic = disableScan
       ? null
       : new ROSLIB.Topic({
@@ -128,11 +155,60 @@ function App() {
           messageType: 'sensor_msgs/msg/LaserScan',
           compression: 'cbor',
           queue_length: 1,
-          throttle_rate: 0,
+          throttle_rate: 200,
         })
     scanTopic?.subscribe((raw) => {
       setScan(raw as unknown as LaserScan)
       setScanArrivedAt(Date.now())
+    })
+
+    const mapTopic = new ROSLIB.Topic({
+      ros,
+      name: '/map',
+      messageType: 'nav_msgs/msg/OccupancyGrid',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 1000,
+    })
+    mapTopic.subscribe((raw) => {
+      setMap(raw as unknown as OccupancyGrid)
+      setMapArrivedAt(Date.now())
+    })
+
+    const plannedPathTopic = new ROSLIB.Topic({
+      ros,
+      name: '/planned_path',
+      messageType: 'nav_msgs/msg/Path',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 2000,
+    })
+    plannedPathTopic.subscribe((raw) => {
+      setPlannedPath(raw as unknown as RosPath)
+    })
+
+    const recordedPathTopic = new ROSLIB.Topic({
+      ros,
+      name: '/recorded_path',
+      messageType: 'nav_msgs/msg/Path',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 1000,
+    })
+    recordedPathTopic.subscribe((raw) => {
+      setRecordedPath(raw as unknown as RosPath)
+    })
+
+    const inflatedMapTopic = new ROSLIB.Topic({
+      ros,
+      name: '/inflated_map',
+      messageType: 'nav_msgs/msg/OccupancyGrid',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 5000,
+    })
+    inflatedMapTopic.subscribe((raw) => {
+      setInflatedMap(raw as unknown as OccupancyGrid)
     })
 
     return () => {
@@ -140,10 +216,14 @@ function App() {
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       telemetryTopic?.unsubscribe()
       cameraTopic?.unsubscribe()
+      lineDebugTopic?.unsubscribe()
       scanTopic?.unsubscribe()
+      mapTopic.unsubscribe()
+      plannedPathTopic.unsubscribe()
+      inflatedMapTopic.unsubscribe()
       ros.close()
     }
-  }, [rosUrl, disableCamera, disableScan, disableTelemetry])
+  }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 500)
@@ -177,8 +257,15 @@ function App() {
 
       <div className="dashboard-grid">
         <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />
+        <CameraPanel
+          title="Line Debug"
+          paintRef={lineDebugPaintRef}
+          format={lineDebugFormat}
+          arrivedAt={lineDebugArrivedAt}
+        />
         <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
         <Charts samples={samples} />
+        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} recordedPath={recordedPath} />
       </div>
 
       <RawJson msg={latest} />

@@ -2,14 +2,15 @@
 """
 Phase 1 master bringup launch file.
 
-Brings up the full hardware and infrastructure stack in a single command:
-  1. LIDAR        (rplidar_ros  → /scan)
-  2. RealSense    (rs_stream    → /camera/color/image_raw)
-  3. Perception   (depth_node   → /perception/front_distance)
-  4. Hardware Bridge (robo_rover → /imu/*, /rover/armed, subscribes /cmd_vel)
-  5. E-Stop       (TODO: not yet implemented)
-  6. Telemetry    (telemetry    → /telemetry/racer)
-  7. rosbridge    (rosbridge_server WebSocket on port 9090)
+Brings up the shared hardware and infrastructure stack in a single command:
+  1. LIDAR           (rplidar_ros  → /scan)
+  2. RealSense       (rs_stream    → /camera/*)
+  3. Wall perception (depth_node   → /perception/front_distance)
+  4. Hardware bridge (robo_rover   → /imu/*, /rover/armed, subscribes /cmd_vel)
+  5. rf2o odometry   (rf2o_laser_odometry → /odom_rf2o)
+  6. Wall follower   (autonomy     → /cmd_vel)
+  7. Telemetry       (telemetry    → /telemetry/*)
+  8. rosbridge       (rosbridge_server WebSocket on port 9090)
 
 Usage:
     ros2 launch racer_bringup master_bringup.launch.py
@@ -24,7 +25,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, LogInfo
+from launch.conditions import IfCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -67,11 +69,17 @@ def generate_launch_description():
         default_value='50',
         description='JPEG compression quality for camera frames (0-100)',
     )
+    enable_lidar_arg = DeclareLaunchArgument(
+        'enable_lidar',
+        default_value='true',
+        description='Whether to start the lidar and lidar-based depth perception stack',
+    )
 
     lidar_port = LaunchConfiguration('lidar_port')
     lidar_baudrate = LaunchConfiguration('lidar_baudrate')
     rover_port = LaunchConfiguration('rover_port')
     rover_baudrate = LaunchConfiguration('rover_baudrate')
+    enable_lidar = LaunchConfiguration('enable_lidar')
 
     # ── 1. LIDAR ─────────────────────────────────────────────────────────────
     lidar_node = Node(
@@ -87,6 +95,7 @@ def generate_launch_description():
             'angle_compensate': True,
         }],
         output='screen',
+        condition=IfCondition(enable_lidar),
     )
 
     # ── 2. RealSense ─────────────────────────────────────────────────────────
@@ -97,18 +106,29 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 3. Perception (lidar-derived front distance) ─────────────────────────
+    # ── 3. Scan filter — fills narrow gaps (glass/windows) before rf2o and wall_follower
+    scan_filter_node = Node(
+        package='perception',
+        executable='scan_filter_node',
+        name='scan_filter_node',
+        output='screen',
+        parameters=[{'max_gap_deg': 30.0}],
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 3b. Perception (lidar-derived front distance) ────────────────────────
     depth_node = Node(
         package='perception',
         executable='depth_node',
         name='depth_node',
         output='screen',
+        condition=IfCondition(enable_lidar),
     )
 
     # ── 4. Hardware Bridge ───────────────────────────────────────────────────
     rover_node = Node(
-        executable='python3',
-        arguments=['-m', 'robo_rover.rover_node'],
+        package='robo_rover',
+        executable='rover_node',
         name='rover_node',
         output='screen',
         emulate_tty=True,
@@ -117,11 +137,58 @@ def generate_launch_description():
             'baud_rate': rover_baudrate,
             'control_frequency': 20.0,
             'imu_frequency': 20.0,
+            'use_velocity_feedback': True,
+            'kp_speed': 120.0,
+            'ki_speed': 60.0,
         }],
     )
 
-    # ── 5. E-Stop ────────────────────────────────────────────────────────────
-    # TODO: E-Stop node — not yet implemented
+    # ── 5. rf2o Laser Odometry ───────────────────────────────────────────────
+    # Static TF required by rf2o: calls lookupTransform(base_link, laser) on
+    # every scan and silently drops it if the transform isn't available.
+    static_tf_base_to_laser = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_base_to_laser',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'laser'],
+        output='log',
+        condition=IfCondition(enable_lidar),
+    )
+
+    rf2o_node = Node(
+        package='rf2o_laser_odometry',
+        executable='rf2o_laser_odometry_node',
+        name='rf2o_laser_odometry',
+        parameters=[{
+            'laser_scan_topic': '/scan',
+            'odom_topic': '/odom_rf2o',
+            'publish_tf': True,
+            'base_frame_id': 'base_link',
+            'odom_frame_id': 'odom',
+            'init_pose_from_topic': '',  # empty = don't wait for ground truth
+            'freq': 10.0,
+        }],
+        ros_arguments=['--log-level', 'rf2o_laser_odometry:=FATAL'],
+        output='log',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 6. IMU Adapter ───────────────────────────────────────────────────────
+    imu_adapter_node = Node(
+        package='autonomy',
+        executable='imu_adapter_node',
+        name='imu_adapter_node',
+        output='log',
+    )
+
+    # ── 6. Wall Nav (PD wall follower, Lap 1) ───────────────────────────────
+    wall_follower_node = Node(
+        package='autonomy',
+        executable='wall_nav_node',
+        name='wall_nav_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
 
     # ── 6. Telemetry Aggregator ──────────────────────────────────────────────
     telemetry_node = Node(
@@ -136,7 +203,62 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. rosbridge WebSocket server ────────────────────────────────────────
+    # ── 7. Path Recorder (Lap 1) ─────────────────────────────────────────────
+    path_recorder_node = Node(
+        package='autonomy',
+        executable='path_recorder_node',
+        name='path_recorder_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 8. Pure Pursuit (Lap 2) ──────────────────────────────────────────────
+    pure_pursuit_node = Node(
+        package='autonomy',
+        executable='pure_pursuit_node',
+        name='pure_pursuit_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 9. Path Planner (A* on SLAM map) ────────────────────────────────────
+    path_planner_node = Node(
+        package='autonomy',
+        executable='path_planner_node',
+        name='path_planner_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 10. SLAM Coordinator (mode switch) ───────────────────────────────────
+    slam_coordinator_node = Node(
+        package='autonomy',
+        executable='slam_coordinator_node',
+        name='slam_coordinator_node',
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # Ensure map save directory exists before slam_toolbox tries to write to it
+    mkdir_map = ExecuteProcess(
+        cmd=['mkdir', '-p', '/home/pi/map'],
+        output='log',
+    )
+
+    # ── 10. slam_toolbox (online async mapping) ───────────────────────────────
+    slam_toolbox_node = Node(
+        package='slam_toolbox',
+        executable='async_slam_toolbox_node',
+        name='slam_toolbox',
+        parameters=[os.path.join(
+            get_package_share_directory('racer_bringup'),
+            'config', 'slam_toolbox_mapping.yaml',
+        )],
+        output='screen',
+        condition=IfCondition(enable_lidar),
+    )
+
+    # ── 8. rosbridge WebSocket server ────────────────────────────────────────
     rosbridge_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             os.path.join(
@@ -156,17 +278,29 @@ def generate_launch_description():
         telemetry_rate_arg,
         camera_rate_arg,
         image_quality_arg,
+        enable_lidar_arg,
 
         # Startup banner
-        LogInfo(msg='[racer_bringup] Starting Phase 1 hardware and infrastructure stack...'),
+        LogInfo(msg='[racer_bringup] Starting shared hardware and infrastructure stack...'),
 
         # Nodes (sensors first, bridge, then aggregators/infrastructure)
         lidar_node,
+        scan_filter_node,
         realsense_node,
         depth_node,
+        static_tf_base_to_laser,
+        rf2o_node,
         rover_node,
+        mkdir_map,
+        imu_adapter_node,
+        wall_follower_node,
+        path_recorder_node,
+        path_planner_node,
+        pure_pursuit_node,
+        slam_coordinator_node,
+        slam_toolbox_node,
         telemetry_node,
         rosbridge_launch,
 
-        LogInfo(msg='[racer_bringup] All nodes launched. Car is ready.'),
+        LogInfo(msg='[racer_bringup] Shared stack launched. Select a controller in system_launch.py or publish /cmd_vel manually.'),
     ])

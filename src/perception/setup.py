@@ -26,6 +26,10 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["depth_node = perception.depth_node:main"],
+        "console_scripts": [
+            "depth_node = perception.depth_node:main",
+            "line_detector = perception.line_detector:main",
+            "scan_filter_node = perception.scan_filter_node:main",
+        ],
     },
 )

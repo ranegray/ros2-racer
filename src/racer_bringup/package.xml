@@ -7,6 +7,14 @@
   <maintainer email="rane.gray@colorado.edu">student</maintainer>
   <license>Apache-2.0</license>
 
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>autonomy</exec_depend>
+  <exec_depend>green_control</exec_depend>
+  <exec_depend>green_vision</exec_depend>
+  <exec_depend>line_control</exec_depend>
+  <exec_depend>perception</exec_depend>
   <exec_depend>rplidar_ros</exec_depend>
   <exec_depend>rs_stream</exec_depend>
   <exec_depend>robo_rover</exec_depend>

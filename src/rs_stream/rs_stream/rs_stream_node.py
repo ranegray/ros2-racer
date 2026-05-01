@@ -7,37 +7,48 @@ from cv_bridge import CvBridge
 import pyrealsense2 as rs
 import numpy as np
 
+
 class RealsenseColorPublisher(Node):
     def __init__(self, width=640, height=480, fps=30):
-        super().__init__('realsense_color_publisher')
-        self.pub = self.create_publisher(Image, '/camera/color/image_raw', 10)
+        super().__init__("realsense_color_publisher")
+        self.pub = self.create_publisher(Image, "/camera/color/image_raw", 10)
         self.bridge = CvBridge()
 
         # Hardware-reset the device to release any stale USB handles
         ctx = rs.context()
         devices = ctx.query_devices()
         for dev in devices:
-            self.get_logger().info(f'Hardware-resetting RealSense device: {dev.get_info(rs.camera_info.name)}')
+            self.get_logger().info(
+                f"Hardware-resetting RealSense device: {dev.get_info(rs.camera_info.name)}"
+            )
             dev.hardware_reset()
         if len(devices) > 0:
             time.sleep(3)  # wait for device to re-enumerate on USB
 
-        self.pipe = rs.pipeline()
-        cfg = rs.config()
-        cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
-
-        # Retry pipeline start in case device is still re-enumerating
+        # Retry pipeline start — recreate pipeline/config each attempt
+        # so they pick up the freshly re-enumerated device
         for attempt in range(5):
             try:
-                self.get_logger().info(f'Starting RealSense pipeline (attempt {attempt + 1}/5)…')
+                self.pipe = rs.pipeline()
+                cfg = rs.config()
+                cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
+                self.get_logger().info(
+                    f"Starting RealSense pipeline (attempt {attempt + 1}/5)…"
+                )
                 self.pipe.start(cfg)
+                self._configure_color_sensor()
+                self.get_logger().info("RealSense pipeline started successfully")
                 break
             except RuntimeError as e:
-                self.get_logger().warn(f'Pipeline start failed: {e}')
+                self.get_logger().warn(f"Pipeline start failed: {e}")
                 if attempt < 4:
                     time.sleep(2)
                 else:
-                    raise RuntimeError('Failed to start RealSense pipeline after 5 attempts') from e
+                    raise RuntimeError(
+                        "Failed to start RealSense pipeline after 5 attempts"
+                    ) from e
+
+        self.frame_count = 0
 
         # timer at ~fps
         self.timer = self.create_timer(1.0 / fps, self.capture_and_publish)
@@ -45,22 +56,44 @@ class RealsenseColorPublisher(Node):
         self._frame_count = 0
         self._heartbeat_interval = fps * 10  # log once every 10 seconds
 
+    def _configure_color_sensor(self):
+        # Lock exposure and white balance so HSV thresholds stay stable.
+        try:
+            sensor = self.pipe.get_active_profile().get_device().first_color_sensor()
+        except Exception as e:
+            self.get_logger().warn(f"Could not get color sensor: {e}")
+            return
+
+        settings = [
+            (rs.option.enable_auto_exposure, 0),
+            (rs.option.exposure, 300),
+            (rs.option.enable_auto_white_balance, 1),
+        ]
+        for opt, val in settings:
+            try:
+                if sensor.supports(opt):
+                    sensor.set_option(opt, val)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to set {opt}: {e}")
+
     def capture_and_publish(self):
         try:
             frames = self.pipe.wait_for_frames(timeout_ms=1000)
-            color  = frames.get_color_frame()
+            color = frames.get_color_frame()
             if not color:
                 return
             img = np.asanyarray(color.get_data())  # BGR uint8
-            msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
+            msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = 'camera_color_optical_frame'
+            msg.header.frame_id = "camera_color_optical_frame"
             self.pub.publish(msg)
-            self._frame_count += 1
-            if self._frame_count % self._heartbeat_interval == 0:
-                self.get_logger().info(f'RealSense streaming OK ({self._frame_count} frames published)')
-        except Exception:
-            pass  # transient frame drop; heartbeat will surface if camera goes silent
+            self.frame_count += 1
+            if self.frame_count % 30 == 0:
+                self.get_logger().info(
+                    f"{self.frame_count} frames published at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}"
+                )
+        except Exception as e:
+            self.get_logger().warn(f"Frame skip: {e}")
 
     def destroy_node(self):
         self.timer.cancel()
@@ -69,6 +102,7 @@ class RealsenseColorPublisher(Node):
         except Exception:
             pass
         super().destroy_node()
+
 
 def main():
     rclpy.init()
@@ -84,6 +118,6 @@ def main():
         except Exception:
             pass
 
-if __name__ == '__main__':
-    main()
 
+if __name__ == "__main__":
+    main()

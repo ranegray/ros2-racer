@@ -36,6 +36,31 @@ export type RacerTelemetry = {
   obstacle_detection: string
 }
 
+export type RosPoint2D = { x: number; y: number }
+
+export type RosPath = {
+  header: { stamp: RosTime; frame_id: string }
+  poses: Array<{
+    header: { stamp: RosTime; frame_id: string }
+    pose: { position: { x: number; y: number; z: number }; orientation: { x: number; y: number; z: number; w: number } }
+  }>
+}
+
+export type OccupancyGrid = {
+  header: { stamp: RosTime; frame_id: string }
+  info: {
+    resolution: number   // metres per cell
+    width: number        // cells
+    height: number       // cells
+    origin: {
+      position: { x: number; y: number; z: number }
+      orientation: { x: number; y: number; z: number; w: number }
+    }
+  }
+  // -1 = unknown, 0 = free, 100 = occupied
+  data: number[] | Int8Array | Uint8Array
+}
+
 export type Sample = {
   t: number // epoch seconds
   front_distance: number

@@ -1,29 +1,36 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { load as yamlLoad } from 'js-yaml'
 
 const MIN_DIST   = 0.15
 const MAX_BRIDGE = 1.0
 
 type Pose = { x: number; y: number; qz: number; qw: number }
 
-// ─── YAML parser (handles yaml.dump output for {poses: [{x,y,qz,qw},...]} only) ───
-function parsePathYaml(text: string): Pose[] {
-  const poses: Pose[] = []
-  let current: Partial<Pose> | null = null
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.trimEnd()
-    const listStart = /^- (.+)/.exec(line)
-    const keyVal    = /^ {2}(\w+): (.+)/.exec(line)
-    if (listStart) {
-      if (current) poses.push(current as Pose)
-      current = {}
-      const kv = /^(\w+): (.+)/.exec(listStart[1])
-      if (kv) (current as Record<string, number>)[kv[1]] = parseFloat(kv[2])
-    } else if (keyVal && current) {
-      (current as Record<string, number>)[keyVal[1]] = parseFloat(keyVal[2])
-    }
+function parsePathYaml(text: string): { poses: Pose[]; error: string | null } {
+  let doc: unknown
+  try {
+    doc = yamlLoad(text)
+  } catch (e) {
+    return { poses: [], error: `YAML parse error: ${e}` }
   }
-  if (current && Object.keys(current).length === 4) poses.push(current as Pose)
-  return poses
+  if (!doc || typeof doc !== 'object' || !('poses' in doc)) {
+    const keys = doc && typeof doc === 'object' ? Object.keys(doc).join(', ') : 'none'
+    const hint = keys.includes('image') && keys.includes('resolution')
+      ? 'This looks like a SLAM map file (track.yaml). You need recorded_path.yaml — find it at ~/.ros/recorded_path.yaml on the rover.'
+      : `No "poses" key found (keys: ${keys || 'none'}).`
+    return { poses: [], error: hint }
+  }
+  const raw = (doc as { poses: unknown }).poses
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { poses: [], error: 'poses list is empty or not an array.' }
+  }
+  const poses: Pose[] = raw.map((p: unknown) => ({
+    x:  Number((p as Record<string, unknown>).x  ?? 0),
+    y:  Number((p as Record<string, unknown>).y  ?? 0),
+    qz: Number((p as Record<string, unknown>).qz ?? 0),
+    qw: Number((p as Record<string, unknown>).qw ?? 1),
+  }))
+  return { poses, error: null }
 }
 
 // ─── Serialise back to YAML (matches Python yaml.dump output) ──────────────────
@@ -182,13 +189,12 @@ export const PathInspectorPanel = memo(function PathInspectorPanel({ onSendPath 
     const reader = new FileReader()
     reader.onload = (ev) => {
       const text = ev.target?.result as string
-      const poses = parsePathYaml(text)
+      const { poses, error } = parsePathYaml(text)
       setOriginal(poses)
       setProcessed([])
       setShowInterp(false)
       posesRef.current = []
-      setStats(null)
-      if (poses.length === 0) setStats('Could not parse any poses from file.')
+      setStats(error)
     }
     reader.readAsText(file)
   }

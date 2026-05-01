@@ -6,6 +6,7 @@ type Props = {
   arrivedAt: number
   stalenessMs?: number
   plannedPath?: RosPath | null
+  overridePath?: RosPath | null
   inflatedMap?: OccupancyGrid | null
   recordedPath?: RosPath | null
   robotPose?: RobotPose | null
@@ -21,6 +22,7 @@ function draw(
   canvas: HTMLCanvasElement,
   map: OccupancyGrid | null,
   plannedPath: RosPath | null | undefined,
+  overridePath: RosPath | null | undefined,
   inflatedMap: OccupancyGrid | null | undefined,
   recordedPath: RosPath | null | undefined,
   robotPose: RobotPose | null | undefined,
@@ -127,7 +129,24 @@ function draw(
     ctx.restore()
   }
 
-  // Overlay planned path (blue line) — drawn last so it sits on top of orange dots
+  // Overlay dashboard override path (magenta) before planner path.
+  if (overridePath && overridePath.poses.length > 1) {
+    ctx.save()
+    ctx.strokeStyle = '#d946ef'
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
+    ctx.beginPath()
+    const first = overridePath.poses[0].pose.position
+    ctx.moveTo(toCanvasX(first.x), toCanvasY(first.y))
+    for (let i = 1; i < overridePath.poses.length; i++) {
+      const p = overridePath.poses[i].pose.position
+      ctx.lineTo(toCanvasX(p.x), toCanvasY(p.y))
+    }
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // Overlay planned path (blue line) — drawn last so it sits on top
   if (plannedPath && plannedPath.poses.length > 1) {
     ctx.save()
     ctx.strokeStyle = '#00e5ff'
@@ -193,6 +212,7 @@ export const MapPanel = memo(function MapPanel({
   arrivedAt,
   stalenessMs = 3000,
   plannedPath,
+  overridePath,
   inflatedMap,
   recordedPath,
   robotPose,
@@ -200,11 +220,13 @@ export const MapPanel = memo(function MapPanel({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const mapRef = useRef<OccupancyGrid | null>(map)
   const pathRef = useRef<RosPath | null | undefined>(plannedPath)
+  const overrideRef = useRef<RosPath | null | undefined>(overridePath)
   const inflatedRef = useRef<OccupancyGrid | null | undefined>(inflatedMap)
   const recordedRef = useRef<RosPath | null | undefined>(recordedPath)
   const poseRef = useRef<RobotPose | null | undefined>(robotPose)
   mapRef.current = map
   pathRef.current = plannedPath
+  overrideRef.current = overridePath
   inflatedRef.current = inflatedMap
   recordedRef.current = recordedPath
   poseRef.current = robotPose
@@ -213,13 +235,13 @@ export const MapPanel = memo(function MapPanel({
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    draw(canvas, map, plannedPath, inflatedMap, recordedPath, robotPose)
-  }, [map, plannedPath, inflatedMap, recordedPath, robotPose])
+    draw(canvas, map, plannedPath, overridePath, inflatedMap, recordedPath, robotPose)
+  }, [map, plannedPath, overridePath, inflatedMap, recordedPath, robotPose])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current, recordedRef.current, poseRef.current))
+    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, overrideRef.current, inflatedRef.current, recordedRef.current, poseRef.current))
     ro.observe(canvas)
     return () => ro.disconnect()
   }, [])
@@ -250,15 +272,18 @@ export const MapPanel = memo(function MapPanel({
         <canvas ref={canvasRef} />
         {!map && <div className="map-placeholder">Waiting for /map…</div>}
       </div>
-      {plannedPath && plannedPath.poses.length > 1 && (
+      {(plannedPath && plannedPath.poses.length > 1) || (overridePath && overridePath.poses.length > 1) ? (
         <div className="map-legend">
           <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#00ff88' }} />Start</span>
           <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff4444' }} />End</span>
+          {overridePath && overridePath.poses.length > 1 && (
+            <span className="map-legend-item"><span className="map-legend-line" style={{ background: '#d946ef' }} />Override</span>
+          )}
           <span className="map-legend-item"><span className="map-legend-line" style={{ background: '#00e5ff' }} />Plan</span>
           {!robotPose && <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff9900' }} />Recorded</span>}
           {robotPose && <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ffffff' }} />Robot</span>}
         </div>
-      )}
+      ) : null}
     </section>
   )
 })

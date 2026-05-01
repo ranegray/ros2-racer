@@ -87,6 +87,7 @@ function App() {
     const [map, setMap] = useState<OccupancyGrid | null>(null);
     const [mapArrivedAt, setMapArrivedAt] = useState(0);
     const [plannedPath, setPlannedPath] = useState<RosPath | null>(null);
+    const [overridePath, setOverridePath] = useState<RosPath | null>(null);
     const [recordedPath, setRecordedPath] = useState<RosPath | null>(null);
     const [inflatedMap, setInflatedMap] = useState<OccupancyGrid | null>(null);
     const [robotPose, setRobotPose] = useState<RobotPose | null>(null);
@@ -530,8 +531,7 @@ function App() {
     const sendPathToPlanner = useCallback((poses: Array<{ x: number; y: number; qz: number; qw: number }>) => {
         const ros = rosRef.current;
         if (!ros) return;
-        const topic = new ROSLIB.Topic({ ros, name: "/dashboard/path_override", messageType: "nav_msgs/msg/Path" });
-        topic.publish(new ROSLIB.Message({
+        const msg = {
             header: { stamp: { sec: 0, nanosec: 0 }, frame_id: "map" },
             poses: poses.map((p) => ({
                 header: { stamp: { sec: 0, nanosec: 0 }, frame_id: "map" },
@@ -540,14 +540,17 @@ function App() {
                     orientation: { x: 0, y: 0, z: p.qz, w: p.qw },
                 },
             })),
-        }));
+        };
+        setOverridePath(msg as RosPath);
+        const topic = new ROSLIB.Topic({ ros, name: "/dashboard/path_override", messageType: "nav_msgs/msg/Path" });
+        topic.publish(msg);
     }, []);
 
     const confirmRace = useCallback(() => {
         const ros = rosRef.current;
         if (!ros) return;
         const topic = new ROSLIB.Topic({ ros, name: "/slam_coordinator/confirm", messageType: "std_msgs/msg/Empty" });
-        topic.publish(new ROSLIB.Message({}));
+        topic.publish({});
     }, []);
 
     const slamDisplay = !slamState ? null
@@ -612,6 +615,7 @@ function App() {
                     map={map}
                     arrivedAt={mapArrivedAt}
                     plannedPath={plannedPath}
+                    overridePath={overridePath}
                     inflatedMap={inflatedMap}
                     recordedPath={plannedPath ? null : recordedPath}
                     robotPose={robotPose}

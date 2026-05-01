@@ -86,8 +86,8 @@ class WallNavNode(Node):
         # Note: on this robot `cmd_vel.angular.z` is a normalised STEERING
         # command (rover_node maps it as angular.z * 500 clipped to +/-1000,
         # so +/-2 = full lock). Gains are tuned for that, not for rad/s.
-        self.declare_parameter("kp", 0.55)
-        self.declare_parameter("kd", 0.25)
+        self.declare_parameter("kp", 0.4)
+        self.declare_parameter("kd", 0.15)
         # alpha-feedback: counteracts the car's yaw toward/away from the wall
         # on straights AND helps drive turn-in as the wall starts bending
         # away through a corner. Final command:
@@ -134,8 +134,8 @@ class WallNavNode(Node):
         # mode. Catches "we're driving into a wall" failures regardless
         # of why we got there.
         self.declare_parameter("emergency_stop_fwd_m", 0.0)
-        self.declare_parameter("target_distance", 0.40)
-        self.declare_parameter("forward_speed", 2.00)
+        self.declare_parameter("target_distance", 0.3)
+        self.declare_parameter("forward_speed", 1.00)
         # Two-ray look-ahead estimator. Angles measured from the car's
         # forward axis (0 degrees), REP-103 convention: +CCW, so the right wall
         # sits at negative angles.
@@ -150,7 +150,7 @@ class WallNavNode(Node):
         # the slowest sustainable corner speed; 0.12 lets corners be taken
         # very slow without stalling. If you ever revert to open-loop in
         # rover_node, raise this back to 0.3-0.4.
-        self.declare_parameter("min_forward_speed", 0.35)
+        self.declare_parameter("min_forward_speed", 0.25)
         self.declare_parameter("speed_alpha_scale_deg", 45.0)
         # Exponential smoothing on the derivative term (0<a<=1, higher=less smoothing).
         self.declare_parameter("d_error_alpha", 0.5)
@@ -160,7 +160,7 @@ class WallNavNode(Node):
         self.declare_parameter("steering_sign", -1.0)
         # Constant steering offset (in the *post-sign* frame) to trim a
         # mechanically off-centre servo.
-        self.declare_parameter("steering_bias", 0.35)
+        self.declare_parameter("steering_bias", 0.0)
         # Wall-loss handling. Doorways/windows lose the right wall
         # briefly; right-turn corners lose it for good. Coast straight
         # for `lost_coast_s` to clear short gaps, then commit a fixed-
@@ -182,14 +182,14 @@ class WallNavNode(Node):
         # so flickery walls (windows, mesh) stay in coast indefinitely
         # rather than accumulating cumulative-lost time into the turn
         # phase.
-        self.declare_parameter("lost_coast_s", 0.4)
+        self.declare_parameter("lost_coast_s", 0.3)
         self.declare_parameter("lost_turn_steering", 2.0)
         self.declare_parameter("commit_turn_s", 2.0)
         # Speed during the lost cycle (coast + turn + release). Decoupled
         # from v_min so cruise tuning doesn't change corner geometry.
         # 2s x ~45 deg/s rotation at full lock at ~0.4 m/s gives a clean ~90 degrees.
         # At lower speeds a 2s commit only completes a partial turn.
-        self.declare_parameter("commit_speed", 0.6)
+        self.declare_parameter("commit_speed", 0.4)
         # Sticky recovery: require this many consecutive valid scans
         # before declaring wall recovered. Without stickiness, a brief
         # valid scan in the middle of a spike-rejected burst (common
@@ -219,24 +219,25 @@ class WallNavNode(Node):
         # disable. 15 degrees was sized for ~2.5ft (0.76m) windows at the
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
-        self.declare_parameter("scan_dilation_deg", 25.0)
+        self.declare_parameter("scan_dilation_deg", 15.0)
         # Front crash avoidance: two diagonal rays (+/-front_avoid_deg) detect
         # whether the approaching wall is angled or flat.
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right
         #   asymmetry < 0                       ->  wall like /  ->  steer left (close only)
         #   |asymmetry| < front_avoid_min_asym  ->  flat wall    ->  full-lock right
-        self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
-        self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
-        self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
-        # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
-        self.declare_parameter("gap_slow_thresh", 3.5)            # m -- start slowing
-        self.declare_parameter("gap_slow_min_speed", 0.4)         # m/s floor while slowing
+        # A gap filter skips avoid when a diagonal reads much farther than the
+        # forward distance (doorway/window beside us), unless we are very close.
+        self.declare_parameter("front_avoid_thresh", 2.8)        # m -- start checking
+        self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 0.33)
-        self.declare_parameter("front_avoid_kd", 2.8)
+        self.declare_parameter("front_avoid_kp", 1.8)
+        self.declare_parameter("front_avoid_kd", 2.5)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
-        self.declare_parameter("avoid_max_speed", 0.7)            # m/s cap during any avoid
+        self.declare_parameter("front_avoid_max_diag_mult", 3.0)  # diagonal > N*fwd = gap
+        self.declare_parameter("front_avoid_abs_gap_thresh", 3.5) # m -- absolute gap limit
+        self.declare_parameter("avoid_crash_close_dist", 1.5)     # m -- allow left escape
+        self.declare_parameter("avoid_crash_left_max", 1.0)       # max left steer
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -413,7 +414,6 @@ class WallNavNode(Node):
         fwd = self._forward_distance(msg)
 
         v_min = self.get_parameter("min_forward_speed").value
-        v_max = self.get_parameter("forward_speed").value
         bias = self.get_parameter("steering_bias").value
         sign = self.get_parameter("steering_sign").value
         max_plausible = self.get_parameter("max_plausible_distance").value
@@ -436,88 +436,88 @@ class WallNavNode(Node):
             self.cmd_pub.publish(Twist())
             return
 
-        # Narrow ±2° forward cone speed cap: ramp down from v_max to
-        # gap_slow_min_speed as the narrow beam closes from gap_slow_thresh to 0.
-        gap_slow_thresh = self.get_parameter("gap_slow_thresh").value
-        gap_slow_min = self.get_parameter("gap_slow_min_speed").value
-        fwd_narrow = self._ray_at_angle(msg, 0.0, math.radians(2.0))
-        if math.isfinite(fwd_narrow) and fwd_narrow < gap_slow_thresh:
-            t = max(0.0, fwd_narrow / gap_slow_thresh)
-            v_max = gap_slow_min + t * (v_max - gap_slow_min)
-
-        # --- Gap threading -------------------------------------------------------
-        # Gap nudge: sample beams from 0° to -60° in 10° steps.
         # --- Front crash avoidance -----------------------------------------------
-        # Two diagonal rays at +/-front_avoid_deg measure wall angle.
-        # asymmetry = front_L - front_R (matches sign convention: sign*asym → correct angular.z):
-        #   wall/gap on RIGHT → front_R large → asymmetry negative → steer right ✓
-        #   wall/gap on LEFT  → front_L large → asymmetry positive → steer left  ✓
-        #   |asymmetry| small               → flat wall          → ignore (below min_asym)
-        front_avoid_slow_thresh = self.get_parameter("front_avoid_slow_thresh").value
+        # Two diagonal rays at +/-front_avoid_deg measure wall angle:
+        #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right
+        #   asymmetry < 0                       ->  wall like /  ->  steer left (close)
+        #   |asymmetry| small                   ->  flat wall    ->  full-lock right
+        # Confirm counter debounces single-scan reflections. Gap filter skips
+        # avoid when a diagonal reads much farther than center (doorway/window).
         front_avoid_thresh = self.get_parameter("front_avoid_thresh").value
         avoid_confirm_scans = self.get_parameter("avoid_confirm_scans").value
-        avoid_max_speed = self.get_parameter("avoid_max_speed").value
+        avoid_crash_close = self.get_parameter("avoid_crash_close_dist").value
 
-        # Stage 1: compute a speed cap that ramps from v_max down to
-        # avoid_max_speed as fwd closes from slow_thresh to avoid_thresh.
-        # The PD section uses this cap so steering still runs normally.
-        if math.isfinite(fwd) and fwd < front_avoid_slow_thresh:
-            t = max(0.0, (fwd - front_avoid_thresh) / (front_avoid_slow_thresh - front_avoid_thresh))
-            _approach_speed_cap = avoid_max_speed + t * (v_max - avoid_max_speed)
-        else:
-            _approach_speed_cap = v_max
-
-        diag_half = math.radians(5.0)
-        front_avoid_deg_r = math.radians(self.get_parameter("front_avoid_deg").value)
-        front_L = self._ray_at_angle(msg, +front_avoid_deg_r, diag_half)
-        front_R = self._ray_at_angle(msg, -front_avoid_deg_r, diag_half)
-        range_max = float(msg.range_max)
-        front_L = front_L if math.isfinite(front_L) else range_max
-        front_R = front_R if math.isfinite(front_R) else range_max
-
-        if not math.isfinite(fwd) or fwd >= front_avoid_thresh:
-            self._avoid_confirm = 0
-        else:
+        if fwd < front_avoid_thresh:
             self._avoid_confirm += 1
+        else:
+            self._avoid_confirm = 0
 
-        fire_avoid = self._avoid_confirm >= avoid_confirm_scans and math.isfinite(fwd) and fwd < front_avoid_thresh
+        if self._avoid_confirm >= avoid_confirm_scans and fwd < front_avoid_thresh:
+            diag_half = math.radians(5.0)
+            front_avoid_deg_r = math.radians(self.get_parameter("front_avoid_deg").value)
+            front_L = self._ray_at_angle(msg, +front_avoid_deg_r, diag_half)
+            front_R = self._ray_at_angle(msg, -front_avoid_deg_r, diag_half)
 
-        if fire_avoid:
-            avoid_kp = self.get_parameter("front_avoid_kp").value
-            avoid_kd = self.get_parameter("front_avoid_kd").value
-            avoid_d_alpha = self.get_parameter("front_avoid_d_alpha").value
-            min_asym = self.get_parameter("front_avoid_min_asym").value
-            max_steer_v = self.get_parameter("max_steering").value
-            proximity = max(0.0, 1.0 - fwd / front_avoid_thresh)
-            avoid_speed = min(avoid_max_speed, max(v_min, v_max * (fwd / front_avoid_thresh)))
-            # front_R - front_L: wall on LEFT (/) → positive → steer RIGHT ✓
-            #                    wall on RIGHT (\) → negative → steer LEFT ✓
-            asymmetry = front_R - front_L
-            asymmetry = max(-2.0, min(2.0, asymmetry))
-            raw_d_asym = asymmetry - self._prev_asymmetry
-            d_asym = (
-                avoid_d_alpha * raw_d_asym
-                + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
-            )
-            self._prev_d_asymmetry = d_asym
-            self._prev_asymmetry = asymmetry
-            if abs(asymmetry) > min_asym:
-                avoid_steer = (
-                    avoid_kp * asymmetry * (1.0 + proximity)
-                    - avoid_kd * d_asym
-                )
-                avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
-                self._avoid_confirm = 0
-                cmd = Twist()
-                cmd.linear.x = float(avoid_speed)
-                cmd.angular.z = float(avoid_steer)
-                self.cmd_pub.publish(cmd)
-                self.get_logger().info(
-                    f"AVOID fwd={fwd:.2f}m "
-                    f"L={front_L:.2f} R={front_R:.2f} "
-                    f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
-                )
-                return
+            if math.isfinite(front_L) and math.isfinite(front_R):
+                max_diag_mult = self.get_parameter("front_avoid_max_diag_mult").value
+                abs_gap_thresh = self.get_parameter("front_avoid_abs_gap_thresh").value
+                rel_gap = front_L > fwd * max_diag_mult or front_R > fwd * max_diag_mult
+                abs_gap = front_L > abs_gap_thresh or front_R > abs_gap_thresh
+
+                if (rel_gap or abs_gap) and fwd > avoid_crash_close:
+                    self.get_logger().info(
+                        f"AVOID SKIP {'abs' if abs_gap else 'rel'}  "
+                        f"fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f}"
+                    )
+                else:
+                    avoid_kp = self.get_parameter("front_avoid_kp").value
+                    avoid_kd = self.get_parameter("front_avoid_kd").value
+                    avoid_d_alpha = self.get_parameter("front_avoid_d_alpha").value
+                    min_asym = self.get_parameter("front_avoid_min_asym").value
+                    crash_left_max = self.get_parameter("avoid_crash_left_max").value
+                    max_steer_v = self.get_parameter("max_steering").value
+                    v_max_v = self.get_parameter("forward_speed").value
+                    proximity = 1.0 - fwd / front_avoid_thresh
+                    avoid_speed = max(v_min, v_max_v * (fwd / front_avoid_thresh))
+                    asymmetry = front_R - front_L
+
+                    if abs(asymmetry) > min_asym:
+                        raw_d_asym = asymmetry - self._prev_asymmetry
+                        d_asym = (
+                            avoid_d_alpha * raw_d_asym
+                            + (1.0 - avoid_d_alpha) * self._prev_d_asymmetry
+                        )
+                        self._prev_d_asymmetry = d_asym
+                        self._prev_asymmetry = asymmetry
+                        avoid_steer = (
+                            avoid_kp * asymmetry * (1.0 + proximity)
+                            - avoid_kd * d_asym
+                        )
+                        if fwd < avoid_crash_close:
+                            avoid_steer = max(-crash_left_max, min(max_steer_v, avoid_steer))
+                        else:
+                            avoid_steer = max(0.0, min(max_steer_v, avoid_steer))
+                        avoid_steer += bias
+                        cmd = Twist()
+                        cmd.linear.x = float(avoid_speed)
+                        cmd.angular.z = float(avoid_steer)
+                        self.cmd_pub.publish(cmd)
+                        self.get_logger().info(
+                            f"AVOID fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
+                            f"asym={asymmetry:+.2f} d={d_asym:+.2f} steer={avoid_steer:+.2f}"
+                        )
+                        return
+                    else:
+                        self._prev_asymmetry = asymmetry
+                        cmd = Twist()
+                        cmd.linear.x = float(avoid_speed)
+                        cmd.angular.z = float(max_steer_v + bias)
+                        self.cmd_pub.publish(cmd)
+                        self.get_logger().info(
+                            f"SOLID WALL fwd={fwd:.2f}m L={front_L:.2f} R={front_R:.2f} "
+                            f"turning right"
+                        )
+                        return
 
         # Spike detector: reject a scan whose (D_ahead, alpha) jumped farther
         # than physically possible from the last valid reading. Prevents
@@ -659,6 +659,7 @@ class WallNavNode(Node):
         k_alpha = self.get_parameter("k_alpha").value
         k_yaw = self.get_parameter("k_yaw").value
         max_steer = self.get_parameter("max_steering").value
+        v_max = self.get_parameter("forward_speed").value
         alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         d_alpha = self.get_parameter("d_error_alpha").value
         max_error = self.get_parameter("max_error").value
@@ -721,7 +722,7 @@ class WallNavNode(Node):
 
         # Ease off the throttle when the wall is swinging away (corner/jut).
         speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)
-        forward_speed = max(v_min, min(_approach_speed_cap, v_max * speed_scale))
+        forward_speed = max(v_min, v_max * speed_scale)
 
         drive_cmd = Twist()
         drive_cmd.linear.x = float(forward_speed)

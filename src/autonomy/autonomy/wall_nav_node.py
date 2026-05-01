@@ -230,7 +230,7 @@ class WallNavNode(Node):
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
         # Gap nudge: beams from 0° to -60° reading ≤ gap_fwd_thresh drive a
         # proportional rightward nudge added to PD steering.
-        self.declare_parameter("gap_fwd_thresh", 1.5)             # m -- beam counts as blocked
+        self.declare_parameter("gap_fwd_thresh", 2.0)             # m -- beam counts as blocked
         self.declare_parameter("gap_nudge_max", 1.0)              # max nudge (all beams blocked)
         # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
         self.declare_parameter("gap_slow_thresh", 3.5)            # m -- start slowing

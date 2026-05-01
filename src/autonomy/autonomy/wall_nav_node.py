@@ -237,7 +237,7 @@ class WallNavNode(Node):
         self.declare_parameter("gap_slow_min_speed", 0.4)         # m/s floor while slowing
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 0.31)
+        self.declare_parameter("front_avoid_kp", 0.3)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("avoid_max_speed", 0.7)            # m/s cap during any avoid

@@ -86,7 +86,7 @@ class WallNavNode(Node):
         # Note: on this robot `cmd_vel.angular.z` is a normalised STEERING
         # command (rover_node maps it as angular.z * 500 clipped to +/-1000,
         # so +/-2 = full lock). Gains are tuned for that, not for rad/s.
-        self.declare_parameter("kp", 0.25)
+        self.declare_parameter("kp", 0.8)
         self.declare_parameter("kd", 0.15)
         # alpha-feedback: counteracts the car's yaw toward/away from the wall
         # on straights AND helps drive turn-in as the wall starts bending
@@ -219,7 +219,7 @@ class WallNavNode(Node):
         # disable. 15 degrees was sized for ~2.5ft (0.76m) windows at the
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
-        self.declare_parameter("scan_dilation_deg", 20.0)
+        self.declare_parameter("scan_dilation_deg", 25.0)
         # Front crash avoidance: two diagonal rays (+/-front_avoid_deg) detect
         # whether the approaching wall is angled or flat.
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right

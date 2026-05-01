@@ -1,0 +1,13 @@
+control:
+  # Existing line-follow planner params
+  steering_kp: 5.0           # rad/s per metre of lateral error
+  drive_speed: 0.5           # m/s, fixed forward speed in DRIVING
+  stop_distance: 0.25        # m, planner halts when goal closer than this
+  goal_timeout: 1.0          # s, treat goal as stale beyond this age
+
+  # Stop sign obedience
+  obey_stops: true           # set false for lap-timing runs (no stops)
+  brake_duration_sec: 1.0    # ramp linear.x from speed_at_entry → 0
+  pause_duration_sec: 1.0    # hold at zero before resuming
+  resume_duration_sec: 0.5   # ramp linear.x from 0 → planner output
+  stop_speed_threshold: 0.05 # m/s; reserved for future odom-based BRAKING completion

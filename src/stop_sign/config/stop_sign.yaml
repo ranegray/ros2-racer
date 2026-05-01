@@ -1,0 +1,49 @@
+stop_sign:
+  enabled: true                # detector node still runs even if obey_stops=false
+
+  # HSV bounds for red. Two bands for hue wraparound.
+  # Hue in degrees [0, 360], sat/val in percent [0, 100].
+  # Tuned against a paper-printed sign in the lab: median hue ~25°, sat ~96%,
+  # val ~55% under indoor lighting. The print + warm light push red toward
+  # orange, so the low band is widened up to 40°. The high band stays
+  # generous to cover cooler lighting.
+  hue_lower_1: 0
+  hue_upper_1: 40
+  hue_lower_2: 330
+  hue_upper_2: 360
+  sat_lower: 40
+  sat_upper: 100
+  val_lower: 25
+  val_upper: 100
+
+  # Morphology. Close kernel sized to bridge the white letter-strokes inside
+  # the octagon so the blob fills back to its theoretical ~0.83 ratio.
+  morph_open_kernel: 3
+  morph_close_kernel: 9
+
+  # Shape filtering — sized for paper-printed signs (~19 cm flat-to-flat)
+  min_area_px: 600             # ~25 px square; ~19 cm sign at ~3 m
+  max_area_px: 50000           # caps at ~225 px square; ~19 cm sign at ~0.5 m
+  aspect_min: 0.7
+  aspect_max: 1.4
+  fill_min: 0.70
+  fill_max: 0.92
+
+  # Distance estimation. The algorithm only sees the red octagon flat-to-flat,
+  # not the white paper margin. Calibrated against ground truth: a sign printed
+  # on a 16 cm square page with ~1 cm of white margin gives 130 px @ 0.66 m
+  # with fx=613.8, implying 14 cm flat-to-flat for the red region.
+  real_size_m: 0.14
+  fallback_focal_px: 600       # D435 at 640x480 if camera_info not received
+
+  # Temporal robustness
+  consecutive_frames: 3
+  position_tolerance_px: 40
+  cooldown_sec: 3.0
+
+  # Distance-based state thresholds
+  approach_distance_m: 1.0     # APPROACH triggers below this
+  detected_distance_m: 2.5
+
+  # Debug
+  debug_every_n_frames: 5

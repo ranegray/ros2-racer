@@ -9,6 +9,7 @@ find_package(sensor_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RacerTelemetry.msg"
+  "msg/StopSignEvent.msg"
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs
 )
 

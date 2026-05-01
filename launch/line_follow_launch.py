@@ -2,9 +2,16 @@
 """
 Launch file for line following behavior.
 
-Launches: rs_stream -> line_detector -> line_control -> rover_node
-"""
+Launches:
+    rs_stream -> line_detector -> line_control -> rover_node
+              \\-> stop_sign_node (publishes /stop_sign/event for line_control)
 
+Pass obey_stops:=false to ignore stop signs (lap-timing runs):
+    ros2 launch ros2-racer line_follow_launch.py obey_stops:=false
+"""
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -14,6 +21,13 @@ from launch_ros.actions import Node
 def generate_launch_description():
     connection_string = LaunchConfiguration("connection_string", default="/dev/ttyACM1")
     baud_rate = LaunchConfiguration("baud_rate", default="115200")
+    obey_stops = LaunchConfiguration("obey_stops", default="true")
+
+    stop_sign_config = os.path.join(
+        get_package_share_directory("stop_sign"),
+        "config",
+        "stop_sign.yaml",
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -25,6 +39,12 @@ def generate_launch_description():
             "baud_rate",
             default_value="115200",
             description="Baud rate for the rover serial connection",
+        ),
+        DeclareLaunchArgument(
+            "obey_stops",
+            default_value="true",
+            description="Obey stop signs detected by stop_sign_node. "
+                        "Set false for lap-timing runs.",
         ),
 
         # RealSense camera stream
@@ -43,12 +63,22 @@ def generate_launch_description():
             output="screen",
         ),
 
-        # Line following controller
+        # Stop sign detector — publishes /stop_sign/event
+        Node(
+            package="stop_sign",
+            executable="stop_sign_node",
+            name="stop_sign_node",
+            output="screen",
+            parameters=[{"config_path": stop_sign_config}],
+        ),
+
+        # Line following controller (subscribes /stop_sign/event)
         Node(
             package="line_control",
             executable="line_control",
             name="line_control",
             output="screen",
+            parameters=[{"obey_stops": obey_stops}],
         ),
 
         # Rover driver

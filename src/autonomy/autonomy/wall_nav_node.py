@@ -734,7 +734,9 @@ class WallNavNode(Node):
         # Bias shifts the neutral point -- not part of the control effort, so
         # it's applied after the clamp.
         steering = sign * steering
-        steering = max(-max_steer, min(max_steer, steering)) + bias + gap_nudge
+        steering = max(-max_steer, min(max_steer, steering)) + bias
+        if self._avoid_confirm == 0:
+            steering += gap_nudge
 
         # Ease off the throttle when the wall is swinging away (corner/jut).
         speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)

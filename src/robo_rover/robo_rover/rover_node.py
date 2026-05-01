@@ -103,6 +103,9 @@ class ArduPilotRoverNode(Node):
         self.motor_temps_pub = self.create_publisher(Float32MultiArray, '/motor_temps', 10)
         self.events_pub = self.create_publisher(Log, '/mavlink_events', 10)
         self._prev_sensor_health: int | None = None
+        # Single receive cache — populated by _mav_recv_loop, read by all other loops.
+        # Avoids every loop calling recv_match and discarding each other's messages.
+        self._mav_cache: dict = {}
 
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -124,7 +127,11 @@ class ArduPilotRoverNode(Node):
         self.status_timer = self.create_timer(1.0, self.status_loop)
         self.battery_timer = self.create_timer(0.5, self.battery_loop)
         self.motor_temps_timer = self.create_timer(0.5, self.motor_temps_loop)
-        self.statustext_timer = self.create_timer(0.1, self.statustext_loop)  # 10 Hz poll
+        # Single receive loop drains the MAVLink buffer at 50 Hz and caches
+        # latest message per type. STATUSTEXT is dispatched immediately here.
+        # This replaces per-loop recv_match calls that were discarding each
+        # other's messages.
+        self._recv_timer = self.create_timer(0.02, self._mav_recv_loop)
         
         # Initialize connection
         self.get_logger().info('Initializing ArduPilot Rover Node...')
@@ -435,12 +442,9 @@ class ArduPilotRoverNode(Node):
         """IMU data processing loop"""
         if not self.connected:
             return
-        
-        # Try to get SCALED_IMU first (preferred)
-        scaled_imu = self.master.recv_match(type='SCALED_IMU', blocking=False)
+        scaled_imu = self._mav_cache.get('SCALED_IMU')
         if scaled_imu is not None:
             self.publish_scaled_imu(scaled_imu)
-            return
     
     def publish_scaled_imu(self, scaled_imu_msg):
         # Gyro message
@@ -465,17 +469,16 @@ class ArduPilotRoverNode(Node):
         armed_msg.data = self.armed
         self.armed_pub.publish(armed_msg)
         
-        # Check connection health
+        # Update armed status from cached heartbeat
         if self.connected:
-            heartbeat = self.master.recv_match(type='HEARTBEAT', blocking=False)
+            heartbeat = self._mav_cache.get('HEARTBEAT')
             if heartbeat is not None:
-                # Update armed status from heartbeat
                 self.armed = bool(heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
     
     def battery_loop(self):
         if not self.connected:
             return
-        sys_status = self.master.recv_match(type='SYS_STATUS', blocking=False)
+        sys_status = self._mav_cache.get('SYS_STATUS')
         if sys_status is None:
             return
         msg = BatteryState()
@@ -510,7 +513,7 @@ class ArduPilotRoverNode(Node):
     def motor_temps_loop(self):
         if not self.connected:
             return
-        esc = self.master.recv_match(type='ESC_TELEMETRY_1_TO_4', blocking=False)
+        esc = self._mav_cache.get('ESC_TELEMETRY_1_TO_4')
         if esc is None:
             return
         temps = [float(t) for t in esc.temperature]
@@ -541,18 +544,27 @@ class ArduPilotRoverNode(Node):
         log.msg = text
         self.events_pub.publish(log)
 
-    def statustext_loop(self) -> None:
+    def _mav_recv_loop(self) -> None:
+        """Drain the MAVLink receive buffer at 50 Hz.
+
+        Caches the latest message of each type in self._mav_cache so that
+        battery_loop, motor_temps_loop, and imu_loop can all read without
+        competing. STATUSTEXT is dispatched immediately since we need every
+        message, not just the latest.
+        """
         if not self.connected:
             return
         while True:
-            st = self.master.recv_match(type='STATUSTEXT', blocking=False)
-            if st is None:
+            msg = self.master.recv_msg()
+            if msg is None:
                 break
-            text = st.text.rstrip('\x00').strip()
-            if not text:
-                continue
-            level = self._MAV_SEV_TO_LEVEL.get(st.severity, 20)
-            self._publish_event(level, text)
+            msg_type = msg.get_type()
+            self._mav_cache[msg_type] = msg
+            if msg_type == 'STATUSTEXT':
+                text = msg.text.rstrip('\x00').strip()
+                if text:
+                    level = self._MAV_SEV_TO_LEVEL.get(msg.severity, 20)
+                    self._publish_event(level, text)
 
     def destroy_node(self):
         """Clean up when node is destroyed"""

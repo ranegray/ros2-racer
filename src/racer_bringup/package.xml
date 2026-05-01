@@ -20,6 +20,9 @@
   <exec_depend>robo_rover</exec_depend>
   <exec_depend>telemetry</exec_depend>
   <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rf2o_laser_odometry</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

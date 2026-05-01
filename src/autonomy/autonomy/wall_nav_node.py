@@ -230,11 +230,11 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
         # Gap threading: fwd blocked + right diagonal open → steer right.
-        self.declare_parameter("gap_fwd_thresh", 5.0)             # m -- fwd counts as blocked
+        self.declare_parameter("gap_fwd_thresh", 3.5)             # m -- fwd counts as blocked
         self.declare_parameter("gap_diag_mult", 1.3)              # diag_R must be > near_R * this
         self.declare_parameter("gap_confirm_scans", 2)            # scans to confirm
         # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
-        self.declare_parameter("gap_slow_thresh", 5.0)            # m -- start slowing
+        self.declare_parameter("gap_slow_thresh", 3.5)            # m -- start slowing
         self.declare_parameter("gap_slow_min_speed", 0.4)         # m/s floor while slowing
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
@@ -456,11 +456,11 @@ class WallNavNode(Node):
         gap_fwd_thresh = self.get_parameter("gap_fwd_thresh").value
         gap_diag_mult = self.get_parameter("gap_diag_mult").value
         gap_confirm_scans = self.get_parameter("gap_confirm_scans").value
-        # Sample near-center (-2°) and far-diagonal (-45°) rays.
+        # Sample near-center (-2°) and far-diagonal (-60°) rays.
         # As robot approaches a gap: near ray hits the wall (~fwd), far ray
         # stays open (large). When far ray also closes, the gap has passed.
         near_R = self._ray_at_angle(msg, math.radians(-2.0), math.radians(3.0))
-        diag_R = self._ray_at_angle(msg, math.radians(-45.0), math.radians(5.0))
+        diag_R = self._ray_at_angle(msg, math.radians(-60.0), math.radians(5.0))
         range_max = float(msg.range_max)
         near_R = near_R if math.isfinite(near_R) else range_max
         diag_R = diag_R if math.isfinite(diag_R) else range_max

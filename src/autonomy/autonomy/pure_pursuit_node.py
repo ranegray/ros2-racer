@@ -48,8 +48,8 @@ class PurePursuitNode(Node):
         super().__init__("pure_pursuit_node")
 
         self.declare_parameter("path_file", os.path.expanduser("~/.ros/recorded_path.yaml"))
-        self.declare_parameter("lookahead", 0.5)
-        self.declare_parameter("speed", 1.10)
+        self.declare_parameter("lookahead", 2.0)
+        self.declare_parameter("speed", 0.90)
         self.declare_parameter("wheelbase", 0.165)
         self.declare_parameter("goal_tolerance", 0.3)
 

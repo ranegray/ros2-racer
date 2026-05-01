@@ -18,13 +18,17 @@ Trigger commands:
   ros2 topic pub --once /slam_coordinator/confirm std_msgs/Empty "{}"
 """
 
+import os
+from datetime import datetime
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Empty
 from slam_toolbox.srv import SaveMap
 
 
-MAP_SAVE_PATH = '/home/pi/map/track'
+MAP_DIR = '/home/pi/map'
+MAP_LATEST_BASE = 'track'  # symlink basename: track.pgm / track.yaml
 
 CONFIRM_CMD = (
     "ros2 topic pub --once /slam_coordinator/confirm std_msgs/msg/Empty '{}'"
@@ -38,6 +42,8 @@ class SlamCoordinatorNode(Node):
         self._mode = "mapping"
         self._map_saved = False
         self._path_saved = False
+        self._save_timestamp: str | None = None
+        self._save_basename: str | None = None  # e.g. /home/pi/map/track_20260501_143022
 
         # Outbound
         self._mode_pub = self.create_publisher(String, "/slam_coordinator/mode", 10)
@@ -85,12 +91,18 @@ class SlamCoordinatorNode(Node):
         self._mode = "saving"
         self._map_saved = False
         self._path_saved = False
+        self._save_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._save_basename = os.path.join(
+            MAP_DIR, f"{MAP_LATEST_BASE}_{self._save_timestamp}"
+        )
         self._publish_mode()
-        self._publish_status("SAVING: recording path and saving map...")
+        self._publish_status(
+            f"SAVING: recording path and saving map (ts={self._save_timestamp})..."
+        )
 
-        # Ask path_recorder to flush immediately
+        # Ask path_recorder to flush immediately; pass timestamp so it archives too.
         save_msg = String()
-        save_msg.data = "save"
+        save_msg.data = f"save:{self._save_timestamp}"
         self._save_path_pub.publish(save_msg)
 
         # Async map save
@@ -110,22 +122,39 @@ class SlamCoordinatorNode(Node):
             return
 
         req = SaveMap.Request()
-        req.name.data = MAP_SAVE_PATH
+        req.name.data = self._save_basename
         future = self._save_map_client.call_async(req)
         future.add_done_callback(self._save_map_done)
-        self.get_logger().info(f"Saving map to {MAP_SAVE_PATH}...")
+        self.get_logger().info(f"Saving map to {self._save_basename}...")
 
     def _save_map_done(self, future):
         try:
             result = future.result()
             if result.result:
-                self.get_logger().info(f"Map saved → {MAP_SAVE_PATH}")
+                self.get_logger().info(f"Map saved → {self._save_basename}")
             else:
                 self.get_logger().warn("Map save service returned falsy result — map appears saved, proceeding")
         except Exception as e:
             self.get_logger().error(f"Map save exception: {e} — proceeding")
+        self._update_map_symlinks()
         self._map_saved = True
         self._check_ready()
+
+    def _update_map_symlinks(self):
+        """Point /home/pi/map/track.{pgm,yaml} at the just-saved timestamped pair."""
+        if not self._save_timestamp:
+            return
+        ts = self._save_timestamp
+        for ext in ("pgm", "yaml"):
+            target = f"{MAP_LATEST_BASE}_{ts}.{ext}"  # relative to MAP_DIR
+            link = os.path.join(MAP_DIR, f"{MAP_LATEST_BASE}.{ext}")
+            try:
+                if os.path.islink(link) or os.path.exists(link):
+                    os.remove(link)
+                os.symlink(target, link)
+                self.get_logger().info(f"Updated symlink {link} → {target}")
+            except OSError as e:
+                self.get_logger().error(f"Failed to update symlink {link}: {e}")
 
     # ------------------------------------------------------------------
     # Path save confirmation

@@ -12,6 +12,7 @@ Override with ROS parameter: output_path
 
 import math
 import os
+from datetime import datetime
 import yaml
 import rclpy
 from rclpy.node import Node
@@ -101,11 +102,15 @@ class PathRecorderNode(Node):
             self.get_logger().info(f"Recorded {len(self._poses)} poses so far")
 
     def _save_path_cb(self, msg: String):
-        if not self._saved:
-            self._save()
-            pub_msg = String()
-            pub_msg.data = "saved"
-            self._path_saved_pub.publish(pub_msg)
+        if self._saved:
+            return
+        timestamp: str | None = None
+        if msg.data.startswith("save:"):
+            timestamp = msg.data.split(":", 1)[1] or None
+        self._save(timestamp=timestamp)
+        pub_msg = String()
+        pub_msg.data = "saved"
+        self._path_saved_pub.publish(pub_msg)
 
     def _close_loop(self):
         """Interpolate waypoints between the last and first pose to close the path."""
@@ -131,21 +136,42 @@ class PathRecorderNode(Node):
             f"Loop closure: added {len(closing)} waypoints to bridge {gap:.2f}m gap"
         )
 
-    def _save(self):
+    def _save(self, timestamp: str | None = None):
         if not self._poses:
             self.get_logger().warn("No poses recorded — nothing to save")
             return
         self._close_loop()
-        os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
-        with open(self._output_path, "w") as f:
+
+        if timestamp is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        latest_path = self._output_path
+        base_dir = os.path.dirname(latest_path)
+        stem, ext = os.path.splitext(os.path.basename(latest_path))
+        archive_name = f"{stem}_{timestamp}{ext}"
+        archive_path = os.path.join(base_dir, archive_name)
+
+        os.makedirs(base_dir, exist_ok=True)
+        with open(archive_path, "w") as f:
             yaml.dump({"poses": self._poses}, f)
+
+        # Update the stable symlink (recorded_path.yaml → recorded_path_<ts>.yaml).
+        # Remove first so writing through an old symlink can't clobber an archive.
+        try:
+            if os.path.islink(latest_path) or os.path.exists(latest_path):
+                os.remove(latest_path)
+            os.symlink(archive_name, latest_path)
+        except OSError as e:
+            self.get_logger().error(f"Failed to update symlink {latest_path}: {e}")
+
         self._saved = True
         self.get_logger().info(
-            f"Saved {len(self._poses)} poses to {self._output_path}"
+            f"Saved {len(self._poses)} poses to {archive_path} (latest → {archive_name})"
         )
 
     def destroy_node(self):
-        self._save()
+        if not self._saved:
+            self._save()
         super().destroy_node()
 
 

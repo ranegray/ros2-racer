@@ -15,7 +15,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Empty, String
 import tf2_ros
-import yaml
+from autonomy.yaml_utils import resolve_map_image_path
 
 
 CONFIRM_CMD = (
@@ -140,25 +140,14 @@ class LatestMapRaceGateNode(Node):
         if not os.path.exists(yaml_path):
             return False, f"WAITING: map yaml missing: {yaml_path}"
 
-        image_path = self._image_path_from_yaml(yaml_path)
+        try:
+            image_path = resolve_map_image_path(yaml_path, map_base=self._map_base)
+        except (OSError, ValueError) as e:
+            return False, f"WAITING: invalid map yaml ({yaml_path}): {e}"
         if not os.path.exists(image_path):
             return False, f"WAITING: map image missing: {image_path}"
 
         return True, "map ready"
-
-    def _image_path_from_yaml(self, yaml_path: str) -> str:
-        try:
-            with open(yaml_path) as f:
-                data = yaml.safe_load(f) or {}
-            image = data.get("image")
-        except Exception:
-            image = None
-
-        if not image:
-            return f"{self._map_base}.pgm"
-        if os.path.isabs(image):
-            return image
-        return os.path.join(os.path.dirname(yaml_path), image)
 
     def _publish_mode(self):
         msg = String()

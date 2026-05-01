@@ -27,7 +27,6 @@ Parameters:
 
 import math
 import os
-import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
@@ -35,6 +34,7 @@ from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import String
 import tf2_ros
+from autonomy.yaml_utils import interpolate_and_close_poses, load_recorded_poses
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -54,6 +54,9 @@ class PurePursuitNode(Node):
         self.declare_parameter("speed_alpha_scale_deg", 45.0)  # alpha at which speed = min_speed
         self.declare_parameter("wheelbase", 0.165)
         self.declare_parameter("goal_tolerance", 0.3)
+        self.declare_parameter("auto_interpolate_path", True)
+        self.declare_parameter("interp_min_dist", 0.15)
+        self.declare_parameter("interp_max_bridge", 1.0)
 
         self._path_file  = self.get_parameter("path_file").value
         self._L_d        = self.get_parameter("lookahead").value
@@ -62,6 +65,9 @@ class PurePursuitNode(Node):
         self._alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         self._L          = self.get_parameter("wheelbase").value
         self._goal_tol   = self.get_parameter("goal_tolerance").value
+        self._auto_interp = bool(self.get_parameter("auto_interpolate_path").value)
+        self._interp_min_dist = float(self.get_parameter("interp_min_dist").value)
+        self._interp_max_bridge = float(self.get_parameter("interp_max_bridge").value)
 
         self._path: list[tuple[float, float]] = []
         self._closest_idx = 0
@@ -129,14 +135,23 @@ class PurePursuitNode(Node):
 
     def _load_fallback_path(self):
         try:
-            with open(self._path_file) as f:
-                data = yaml.safe_load(f)
-            self._path = [(p["x"], p["y"]) for p in data["poses"]]
+            poses = load_recorded_poses(self._path_file)
+            if self._auto_interp:
+                poses, added, closed = interpolate_and_close_poses(
+                    poses,
+                    min_dist=self._interp_min_dist,
+                    max_bridge=self._interp_max_bridge,
+                )
+                self.get_logger().info(
+                    f"Auto-interpolated fallback path: {len(poses)} poses "
+                    f"(added={added}, loop_closed={closed})"
+                )
+            self._path = [(p["x"], p["y"]) for p in poses]
             self.get_logger().warn(
                 f"No planned path received — falling back to recorded yaml "
                 f"({len(self._path)} waypoints)"
             )
-        except Exception as e:
+        except (OSError, ValueError) as e:
             self.get_logger().error(f"Failed to load fallback path: {e}")
 
     def _pose_tick(self):

@@ -24,7 +24,6 @@ Parameters:
 import heapq
 import math
 import os
-import yaml
 
 import numpy as np
 import rclpy
@@ -34,6 +33,7 @@ from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 import tf2_ros
+from autonomy.yaml_utils import interpolate_and_close_poses, load_recorded_poses
 
 _LATCHED_QOS = QoSProfile(
     depth=1,
@@ -51,20 +51,28 @@ class PathPlannerNode(Node):
         self.declare_parameter("path_file",
                                os.path.expanduser("~/.ros/recorded_path.yaml"))
         self.declare_parameter("inflation_radius", 0.45)
+        self.declare_parameter("auto_interpolate_path", True)
+        self.declare_parameter("interp_min_dist", 0.15)
+        self.declare_parameter("interp_max_bridge", 1.0)
 
         self._path_file = self.get_parameter("path_file").value
         self._infl_r    = self.get_parameter("inflation_radius").value
+        self._auto_interp = bool(self.get_parameter("auto_interpolate_path").value)
+        self._interp_min_dist = float(self.get_parameter("interp_min_dist").value)
+        self._interp_max_bridge = float(self.get_parameter("interp_max_bridge").value)
 
         self._map: OccupancyGrid | None = None
         self._racing = False
+        self._override_poses: list | None = None  # set by dashboard before confirming race
 
         self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._path_pub     = self.create_publisher(Path,          "/planned_path",  _LATCHED_QOS)
         self._inflated_pub = self.create_publisher(OccupancyGrid, "/inflated_map",  _LATCHED_QOS)
-        self.create_subscription(OccupancyGrid, "/map", self._map_cb, 1)
-        self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
+        self.create_subscription(OccupancyGrid, "/map",                    self._map_cb,      1)
+        self.create_subscription(String,        "/slam_coordinator/mode",  self._mode_cb,    10)
+        self.create_subscription(Path,          "/dashboard/path_override", self._override_cb, 1)
 
         self.get_logger().info(
             f"Path planner ready — inflation={self._infl_r:.2f} m, "
@@ -75,6 +83,17 @@ class PathPlannerNode(Node):
 
     def _map_cb(self, msg: OccupancyGrid):
         self._map = msg
+
+    def _override_cb(self, msg: Path):
+        """Dashboard sent an interpolated path — cache it and replan immediately."""
+        self._override_poses = [
+            {"x": ps.pose.position.x, "y": ps.pose.position.y}
+            for ps in msg.poses
+        ]
+        self.get_logger().info(
+            f"Dashboard path override received: {len(self._override_poses)} poses — replanning"
+        )
+        self._plan()
 
     def _mode_cb(self, msg: String):
         if msg.data in ("ready", "racing") and not self._racing:
@@ -116,14 +135,27 @@ class PathPlannerNode(Node):
         inflated_msg.data            = [100 if v else 0 for v in inflated.flatten().tolist()]
         self._inflated_pub.publish(inflated_msg)
 
-        # Load recorded path — use midpoint and 3/4 point as A* via-points
-        try:
-            with open(self._path_file) as f:
-                data = yaml.safe_load(f)
-            poses = data["poses"]
-        except Exception as e:
-            self.get_logger().error(f"Failed to load recorded path: {e}")
-            return
+        # Load recorded path — use midpoint and 3/4 point as A* via-points.
+        # Dashboard can send an interpolated override via /dashboard/path_override.
+        if self._override_poses is not None:
+            poses = self._override_poses
+            self.get_logger().info(f"Using dashboard override path ({len(poses)} poses)")
+        else:
+            try:
+                poses = load_recorded_poses(self._path_file)
+            except (OSError, ValueError) as e:
+                self.get_logger().error(f"Failed to load recorded path: {e}")
+                return
+            if self._auto_interp:
+                poses, added, closed = interpolate_and_close_poses(
+                    poses,
+                    min_dist=self._interp_min_dist,
+                    max_bridge=self._interp_max_bridge,
+                )
+                self.get_logger().info(
+                    f"Auto-interpolated recorded path: {len(poses)} poses "
+                    f"(added={added}, loop_closed={closed})"
+                )
 
         if len(poses) < 4:
             self.get_logger().error("Recorded path too short to plan")

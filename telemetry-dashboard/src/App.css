@@ -2,6 +2,7 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
   padding: 12px 14px;
   box-sizing: border-box;
@@ -138,20 +139,19 @@
 
 /* grid: camera + lidar + charts */
 .dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 10px;
+  column-count: 3;
+  column-gap: 10px;
 }
 
 @media (max-width: 1200px) {
   .dashboard-grid {
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    column-count: 2;
   }
 }
 
 @media (max-width: 700px) {
   .dashboard-grid {
-    grid-template-columns: 1fr;
+    column-count: 1;
   }
 }
 
@@ -159,11 +159,18 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
+  box-sizing: border-box;
   background: color-mix(in srgb, var(--bg) 70%, var(--accent-bg));
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  min-height: 170px;
+  margin: 0 0 10px;
+  max-width: 100%;
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .panel-header {
@@ -261,6 +268,11 @@
   }
 }
 
+.lidar-panel .lidar-frame {
+  width: min(100%, 360px, 30vh);
+  margin-inline: auto;
+}
+
 .lidar-placeholder {
   position: absolute;
   inset: 0;
@@ -325,12 +337,17 @@
   }
 }
 
+.map-panel .map-frame {
+  width: min(100%, 380px, 32vh);
+  margin-inline: auto;
+}
+
 .map-legend {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 2px 2px;
+  gap: 8px;
+  padding: 0 2px;
 }
 
 .map-legend-item {
@@ -421,6 +438,52 @@
   gap: 2px;
   max-height: 200px;
   overflow-y: auto;
+}
+
+@media (max-height: 860px) {
+  .dashboard {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .dashboard-grid {
+    column-gap: 8px;
+  }
+
+  .tile {
+    min-height: 46px;
+    padding: 6px 8px;
+  }
+
+  .tile-label {
+    font-size: 10px;
+  }
+
+  .tile-value {
+    font-size: 14px;
+  }
+
+  .panel {
+    padding: 8px;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .camera-frame {
+    aspect-ratio: 6 / 5;
+  }
+
+  .lidar-panel .lidar-frame {
+    width: min(100%, 280px, 26vh);
+  }
+
+  .map-panel .map-frame {
+    width: min(100%, 300px, 28vh);
+  }
+
+  .event-list {
+    max-height: 140px;
+  }
 }
 
 .event-row {

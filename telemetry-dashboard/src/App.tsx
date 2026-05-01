@@ -549,16 +549,17 @@ function App() {
                     recordedPath={recordedPath}
                 />
                 <Charts samples={samples} />
-                <CameraPanel
-                    paintRef={cameraPaintRef}
-                    format={imageFormat}
-                    arrivedAt={imageArrivedAt}
-                />
                 <LapLog
                     lapTimes={lapTimes}
                     currentMs={lapStartMs !== null ? lapElapsedMs : null}
                     stopped={lapStopped}
                 />
+                <CameraPanel
+                    paintRef={cameraPaintRef}
+                    format={imageFormat}
+                    arrivedAt={imageArrivedAt}
+                />
+
                 <BatteryPanel
                     battery={battery}
                     arrivedAt={batteryArrivedAt}

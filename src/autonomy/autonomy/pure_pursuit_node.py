@@ -50,12 +50,16 @@ class PurePursuitNode(Node):
         self.declare_parameter("path_file", os.path.expanduser("~/.ros/recorded_path.yaml"))
         self.declare_parameter("lookahead", 2.0)
         self.declare_parameter("speed", 0.90)
+        self.declare_parameter("min_speed", 0.30)
+        self.declare_parameter("speed_alpha_scale_deg", 45.0)  # alpha at which speed = min_speed
         self.declare_parameter("wheelbase", 0.165)
         self.declare_parameter("goal_tolerance", 0.3)
 
         self._path_file  = self.get_parameter("path_file").value
         self._L_d        = self.get_parameter("lookahead").value
         self._speed      = self.get_parameter("speed").value
+        self._min_speed  = self.get_parameter("min_speed").value
+        self._alpha_scale = math.radians(self.get_parameter("speed_alpha_scale_deg").value)
         self._L          = self.get_parameter("wheelbase").value
         self._goal_tol   = self.get_parameter("goal_tolerance").value
 
@@ -153,26 +157,33 @@ class PurePursuitNode(Node):
         qw = tf.transform.rotation.w
         robot_yaw = 2.0 * math.atan2(qz, qw)
 
-        # Advance closest index (wraps for closed loop — _closest_idx is unbounded)
+        # Advance closest index: scan up to 100 waypoints ahead and pick the
+        # nearest one. More robust than one-step greedy — handles overshoot and
+        # dense waypoint clusters without getting stuck.
         n = len(self._path)
-        for _ in range(n):
-            curr = self._closest_idx % n
-            nxt  = (self._closest_idx + 1) % n
-            cx, cy = self._path[curr]
-            nx, ny = self._path[nxt]
-            if math.hypot(rx - nx, ry - ny) < math.hypot(rx - cx, ry - cy):
-                self._closest_idx += 1
-            else:
-                break
+        search_ahead = min(n, 100)
+        best_k = 0
+        best_dist = float('inf')
+        for k in range(search_ahead):
+            idx = (self._closest_idx + k) % n
+            d = math.hypot(rx - self._path[idx][0], ry - self._path[idx][1])
+            if d < best_dist:
+                best_dist = d
+                best_k = k
+        self._closest_idx += best_k
 
-        # Find lookahead point at arc-length L_d ahead (wraps for closed loop)
+        # Find lookahead point at arc-length L_d ahead (wraps for closed loop).
+        # Track the furthest point reached so the fallback is always forward,
+        # not back at the closest point (which causes oscillation in place).
         lookahead_pt = None
+        last_pt = self._path[self._closest_idx % n]
         accum = 0.0
         for k in range(n):
             i = (self._closest_idx + k) % n
             j = (self._closest_idx + k + 1) % n
             ax, ay = self._path[i]
             bx, by = self._path[j]
+            last_pt = (bx, by)
             seg_len = math.hypot(bx - ax, by - ay)
             if accum + seg_len >= self._L_d:
                 t = (self._L_d - accum) / seg_len
@@ -181,7 +192,7 @@ class PurePursuitNode(Node):
             accum += seg_len
 
         if lookahead_pt is None:
-            lookahead_pt = self._path[self._closest_idx % n]
+            lookahead_pt = last_pt  # furthest point reached, not closest
 
         lx, ly = lookahead_pt
         dx = lx - rx
@@ -202,8 +213,12 @@ class PurePursuitNode(Node):
         angular_z = -angular_z  # invert: this rover positive angular.z = RIGHT
         angular_z = max(-2.0, min(2.0, angular_z))
 
+        # Speed adaptation: slow for sharp heading errors (corners), fast for straights.
+        speed_scale = max(0.0, 1.0 - abs(alpha) / self._alpha_scale)
+        v = max(self._min_speed, self._speed * speed_scale)
+
         cmd = Twist()
-        cmd.linear.x  = self._speed
+        cmd.linear.x  = v
         cmd.angular.z = angular_z
         self._cmd_pub.publish(cmd)
 

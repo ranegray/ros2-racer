@@ -21,33 +21,31 @@ const TONE_COLOR: Record<string, string> = {
   ok:   '#22c55e',
   warn: '#f59e0b',
   bad:  '#ef4444',
+  idle: '#4b5563',
 }
 
 export const MotorHeatPanel = memo(function MotorHeatPanel({ temps, arrivedAt, stalenessMs = 3000 }: Props) {
   const now = Date.now()
   const stale = !temps || arrivedAt === 0 || now - arrivedAt > stalenessMs
-  const motors = temps?.data ?? []
-  // Only show motors that reported a non-zero temp
-  const active = motors.filter(t => t > 0)
+  const motors = Array.from(temps?.data ?? [])
 
   return (
     <section className="panel motor-heat-panel">
       <div className="panel-header">
         <h2>Motor Heat</h2>
         <span className={`badge ${stale ? 'badge-stale' : 'badge-live'}`}>
-          {stale ? 'no ESC data' : `${active.length} ESC${active.length !== 1 ? 's' : ''}`}
+          {stale ? 'no ESC data' : `${motors.length} ESC${motors.length !== 1 ? 's' : ''}`}
         </span>
       </div>
 
       {stale ? (
         <div className="battery-placeholder">Waiting for /motor_temps…</div>
-      ) : active.length === 0 ? (
-        <div className="battery-placeholder">ESC telemetry disabled</div>
+      ) : motors.length === 0 ? (
+        <div className="battery-placeholder">No ESC data in message</div>
       ) : (
         <div className="motor-grid">
           {motors.map((c, i) => {
-            if (c <= 0) return null
-            const tone = tempTone(c)
+            const tone = c <= 0 ? 'idle' : tempTone(c)
             const color = TONE_COLOR[tone]
             const fill = Math.min(1, c / MAX_C)
             return (
@@ -56,7 +54,7 @@ export const MotorHeatPanel = memo(function MotorHeatPanel({ temps, arrivedAt, s
                 <div className="motor-bar-track">
                   <div className="motor-bar-fill" style={{ width: `${fill * 100}%`, background: color }} />
                 </div>
-                <span className="motor-temp" style={{ color }}>{c.toFixed(0)}°</span>
+                <span className="motor-temp" style={{ color }}>{c <= 0 ? 'n/a' : `${c.toFixed(0)}°`}</span>
               </div>
             )
           })}

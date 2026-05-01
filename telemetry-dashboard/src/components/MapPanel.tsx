@@ -106,16 +106,27 @@ function draw(
     ctx.drawImage(ovOff, offX, offY, drawW, drawH)
   }
 
-  // Overlay planned path
+  const { resolution, origin } = map.info
+  const ox = origin.position.x
+  const oy = origin.position.y
+  const toCanvasX = (wx: number) => offX + ((wx - ox) / resolution) * scale
+  const toCanvasY = (wy: number) => offY + drawH - ((wy - oy) / resolution) * scale
+
+  // Overlay recorded path (orange dots) — drawn first so planned path renders on top
+  if (recordedPath && recordedPath.poses.length > 0) {
+    ctx.save()
+    ctx.fillStyle = '#ff9900'
+    for (const pose of recordedPath.poses) {
+      const { x, y } = pose.pose.position
+      ctx.beginPath()
+      ctx.arc(toCanvasX(x), toCanvasY(y), 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  // Overlay planned path (blue line) — drawn last so it sits on top of orange dots
   if (plannedPath && plannedPath.poses.length > 1) {
-    const { resolution, origin } = map.info
-    const ox = origin.position.x
-    const oy = origin.position.y
-
-    // World → canvas pixel: flip Y (ROS Y-up, canvas Y-down)
-    const toCanvasX = (wx: number) => offX + ((wx - ox) / resolution) * scale
-    const toCanvasY = (wy: number) => offY + drawH - ((wy - oy) / resolution) * scale
-
     ctx.save()
     ctx.strokeStyle = '#00e5ff'
     ctx.lineWidth = 2
@@ -141,25 +152,6 @@ function draw(
     ctx.beginPath()
     ctx.arc(toCanvasX(last.x), toCanvasY(last.y), 4, 0, Math.PI * 2)
     ctx.fill()
-    ctx.restore()
-  }
-
-  // Overlay recorded path (live waypoints during mapping lap)
-  if (recordedPath && recordedPath.poses.length > 0) {
-    const { resolution, origin } = map.info
-    const ox = origin.position.x
-    const oy = origin.position.y
-    const toCanvasX = (wx: number) => offX + ((wx - ox) / resolution) * scale
-    const toCanvasY = (wy: number) => offY + drawH - ((wy - oy) / resolution) * scale
-
-    ctx.save()
-    ctx.fillStyle = '#ff9900'
-    for (const pose of recordedPath.poses) {
-      const { x, y } = pose.pose.position
-      ctx.beginPath()
-      ctx.arc(toCanvasX(x), toCanvasY(y), 3, 0, Math.PI * 2)
-      ctx.fill()
-    }
     ctx.restore()
   }
 }
@@ -223,6 +215,14 @@ export const MapPanel = memo(function MapPanel({
         <canvas ref={canvasRef} />
         {!map && <div className="map-placeholder">Waiting for /map…</div>}
       </div>
+      {plannedPath && plannedPath.poses.length > 1 && (
+        <div className="map-legend">
+          <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#00ff88' }} />Start</span>
+          <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff4444' }} />End</span>
+          <span className="map-legend-item"><span className="map-legend-line" style={{ background: '#00e5ff' }} />Plan</span>
+          <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff9900' }} />Recorded</span>
+        </div>
+      )}
     </section>
   )
 })

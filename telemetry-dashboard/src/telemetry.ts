@@ -44,7 +44,7 @@ export type BatteryState = {
 }
 
 export type MotorTemps = {
-  data: number[]  // °C per ESC, up to 4 elements
+  data: number[] | Float32Array  // °C per ESC, up to 4 elements
 }
 
 export type Odometry = {
@@ -87,6 +87,16 @@ export type Sample = {
 
 export const BUFFER_LEN = 200
 
+// rcl_interfaces/msg/Log — subset we care about
+export type RosLogMsg = {
+  stamp: RosTime
+  level: number  // 10=DEBUG 20=INFO 30=WARN 40=ERROR 50=FATAL
+  name: string
+  msg: string
+}
+
+export const EVENT_BUFFER_LEN = 200
+
 export type BatterySample = {
   t: number
   voltage: number
@@ -102,6 +112,13 @@ export type LidarSample = {
   validPct: number   // fraction of readings that are finite & in-range (0–1)
 }
 export const LIDAR_BUFFER_LEN = 200
+
+export type SpeedSample = {
+  t: number
+  measured: number   // m/s from /rover/speed
+  setpoint: number   // m/s from /rover/speed_target
+}
+export const SPEED_BUFFER_LEN = 300  // ~15 s at 20 Hz
 
 export function stampToSeconds(stamp: RosTime): number {
   return stamp.sec + stamp.nanosec * 1e-9

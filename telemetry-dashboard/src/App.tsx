@@ -4,13 +4,16 @@ import { BatteryPanel } from './components/BatteryPanel'
 import { MotorHeatPanel } from './components/MotorHeatPanel'
 import { CameraPanel } from './components/CameraPanel'
 import { Charts } from './components/Charts'
+import { EventLog } from './components/EventLog'
+import { LapLog } from './components/LapLog'
 import { LidarCharts } from './components/LidarCharts'
 import { LidarPolar } from './components/LidarPolar'
 import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
+import { SpeedPanel } from './components/SpeedPanel'
 import { StatusTiles } from './components/StatusTiles'
-import type { BatterySample, BatteryState, CompressedImage, LaserScan, LidarSample, MotorTemps, Odometry, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
-import { BATTERY_BUFFER_LEN, BUFFER_LEN, LIDAR_BUFFER_LEN, toSample } from './telemetry'
+import type { BatterySample, BatteryState, CompressedImage, LaserScan, LidarSample, MotorTemps, Odometry, OccupancyGrid, RacerTelemetry, RosLogMsg, RosPath, Sample, SpeedSample } from './telemetry'
+import { BATTERY_BUFFER_LEN, BUFFER_LEN, EVENT_BUFFER_LEN, LIDAR_BUFFER_LEN, SPEED_BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
 const DEFAULT_ROS_URL = 'ws://100.86.204.127:9090'
@@ -65,8 +68,13 @@ function App() {
   const [now, setNow] = useState(() => Date.now())
   const [lapStartMs, setLapStartMs] = useState<number | null>(null)
   const [lapElapsedMs, setLapElapsedMs] = useState(0)
+  const [lapStopped, setLapStopped] = useState(false)
+  const [lapTimes, setLapTimes] = useState<number[]>([])
   const lapStartMsRef = useRef<number | null>(null)
   lapStartMsRef.current = lapStartMs
+  const lapElapsedRef = useRef(0)
+  const lapStoppedRef = useRef(false)
+  lapStoppedRef.current = lapStopped
   const motionCountRef = useRef(0)
   const isArmedRef = useRef(false)
   const [battery, setBattery] = useState<BatteryState | null>(null)
@@ -78,6 +86,14 @@ function App() {
   const [batterySamples, setBatterySamples] = useState<BatterySample[]>([])
   const lidarBufferRef = useRef<LidarSample[]>([])
   const [lidarSamples, setLidarSamples] = useState<LidarSample[]>([])
+  const [events, setEvents] = useState<RosLogMsg[]>([])
+  const latestSpeedRef = useRef(0)
+  const latestSpeedTargetRef = useRef(0)
+  const [speedMeasured, setSpeedMeasured] = useState<number | null>(null)
+  const [speedTarget, setSpeedTarget] = useState<number | null>(null)
+  const [speedArrivedAt, setSpeedArrivedAt] = useState(0)
+  const speedBufferRef = useRef<SpeedSample[]>([])
+  const [speedSamples, setSpeedSamples] = useState<SpeedSample[]>([])
   // Camera frames bypass React state: at 30 Hz, routing ~20 KB Uint8Arrays
   // through setState ramps Chrome's tab memory by tens of MB/s (off-heap,
   // invisible to JS heap snapshots — likely React retaining state snapshots
@@ -307,6 +323,57 @@ function App() {
       setMotorTempsArrivedAt(Date.now())
     })
 
+    const eventsTopic = new ROSLIB.Topic({
+      ros,
+      name: '/mavlink_events',
+      messageType: 'rcl_interfaces/msg/Log',
+      compression: 'cbor',
+      queue_length: 10,
+    })
+    eventsTopic.subscribe((raw) => {
+      const msg = raw as unknown as RosLogMsg
+      setEvents(prev => {
+        const next = prev.length >= EVENT_BUFFER_LEN ? prev.slice(1) : prev
+        return [...next, msg]
+      })
+    })
+
+    // rover/speed and rover/speed_target — published by rover_node's velocity PI loop.
+    // Together they show whether the motor is actually achieving the commanded speed,
+    // which is the clearest indicator of battery sag or motor issues.
+    const speedTopic = new ROSLIB.Topic({
+      ros,
+      name: '/rover/speed',
+      messageType: 'std_msgs/msg/Float32',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 100,
+    })
+    speedTopic.subscribe((raw) => {
+      const v = (raw as unknown as { data: number }).data
+      latestSpeedRef.current = v
+      setSpeedMeasured(v)
+      setSpeedArrivedAt(Date.now())
+      const next = speedBufferRef.current.slice(-(SPEED_BUFFER_LEN - 1))
+      next.push({ t: Date.now() / 1000, measured: v, setpoint: latestSpeedTargetRef.current })
+      speedBufferRef.current = next
+      setSpeedSamples(next)
+    })
+
+    const speedTargetTopic = new ROSLIB.Topic({
+      ros,
+      name: '/rover/speed_target',
+      messageType: 'std_msgs/msg/Float32',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 100,
+    })
+    speedTargetTopic.subscribe((raw) => {
+      const v = (raw as unknown as { data: number }).data
+      latestSpeedTargetRef.current = v
+      setSpeedTarget(v)
+    })
+
     return () => {
       disposed = true
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
@@ -320,6 +387,9 @@ function App() {
       odomTopic.unsubscribe()
       batteryTopic.unsubscribe()
       motorTempsTopic.unsubscribe()
+      eventsTopic.unsubscribe()
+      speedTopic.unsubscribe()
+      speedTargetTopic.unsubscribe()
       ros.close()
     }
   }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
@@ -330,10 +400,38 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (lapStartMs === null) return
-    const id = window.setInterval(() => setLapElapsedMs(Date.now() - lapStartMs), 100)
+    if (lapStartMs === null || lapStopped) return
+    const id = window.setInterval(() => {
+      const elapsed = Date.now() - lapStartMs
+      lapElapsedRef.current = elapsed
+      setLapElapsedMs(elapsed)
+    }, 100)
     return () => window.clearInterval(id)
-  }, [lapStartMs])
+  }, [lapStartMs, lapStopped])
+
+  const handleLapToggle = () => {
+    if (lapStartMsRef.current === null) return
+    if (lapStoppedRef.current) {
+      // Resume: shift start time so elapsed continues from frozen value
+      setLapStartMs(Date.now() - lapElapsedRef.current)
+      setLapStopped(false)
+    } else {
+      // Stop: freeze elapsed and record as a split
+      const elapsed = Date.now() - lapStartMsRef.current
+      lapElapsedRef.current = elapsed
+      setLapElapsedMs(elapsed)
+      setLapStopped(true)
+      setLapTimes(prev => [...prev, elapsed])
+    }
+  }
+
+  const handleLapReset = () => {
+    setLapStartMs(null)
+    setLapElapsedMs(0)
+    lapElapsedRef.current = 0
+    setLapStopped(false)
+    setLapTimes([])
+  }
 
   const telemetryStale =
     telemetryArrivedAt === 0 || now - telemetryArrivedAt > TELEMETRY_STALE_MS
@@ -362,7 +460,12 @@ function App() {
         connected={connected}
         latest={latest}
         lapMs={lapStartMs !== null ? lapElapsedMs : null}
-        onLapReset={() => { setLapStartMs(null); setLapElapsedMs(0) }}
+        lapStopped={lapStopped}
+        onLapToggle={handleLapToggle}
+        onLapReset={handleLapReset}
+        voltage={battery?.voltage ?? null}
+        speedMeasured={speedMeasured}
+        speedTarget={speedTarget}
       />
 
       <div className="dashboard-grid">
@@ -370,8 +473,11 @@ function App() {
         <LidarCharts lidarSamples={lidarSamples} telSamples={samples} />
         <Charts samples={samples} />
         <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} recordedPath={recordedPath} />
+        <SpeedPanel measured={speedMeasured} setpoint={speedTarget} samples={speedSamples} arrivedAt={speedArrivedAt} />
         <BatteryPanel battery={battery} arrivedAt={batteryArrivedAt} samples={batterySamples} />
         <MotorHeatPanel temps={motorTemps} arrivedAt={motorTempsArrivedAt} />
+        <LapLog lapTimes={lapTimes} currentMs={lapStartMs !== null ? lapElapsedMs : null} stopped={lapStopped} />
+        <EventLog events={events} />
         <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />
         <CameraPanel
           title="Line Debug"

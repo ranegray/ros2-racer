@@ -73,6 +73,15 @@ export const BatteryPanel = memo(function BatteryPanel({ battery, arrivedAt, sam
     ? 'no data'
     : `${cells !== null ? `${cells}S · ` : ''}${v !== null ? v.toFixed(2) + ' V' : '—'}`
 
+  // Session-low and sag: derived from the rolling sample buffer.
+  // Sag = peak seen - current voltage; a large sag under load is the
+  // clearest indicator of a battery with high internal resistance.
+  const validSamples = samples.filter(s => s.voltage > 0)
+  const sessionLowV  = validSamples.length ? Math.min(...validSamples.map(s => s.voltage)) : null
+  const sessionHighV = validSamples.length ? Math.max(...validSamples.map(s => s.voltage)) : null
+  const sagV = sessionHighV !== null && v !== null ? sessionHighV - v : null
+  const sagTone = sagV !== null && sagV > 0.3 ? 'bad' : sagV !== null && sagV > 0.1 ? 'warn' : 'ok'
+
   const voltageData = useMemo(() => toSeries(samples, (s) => s.voltage), [samples])
   const currentData = useMemo(() => toSeries(samples, (s) => s.current), [samples])
   const powerData   = useMemo(() => toSeries(samples, (s) => s.power),   [samples])
@@ -122,15 +131,35 @@ export const BatteryPanel = memo(function BatteryPanel({ battery, arrivedAt, sam
             </div>
           </div>
 
-          {samples.length > 1 && (
-            <div className="charts">
-              <Sparkline label="Voltage" unit="V" color={barColor} data={voltageData} />
-              <Sparkline label="Current" unit="A" color="#38bdf8" data={currentData} />
-              <Sparkline label="Power"   unit="W" color="#c084fc" data={powerData} />
+          <div className="battery-stats">
+            <div className="battery-stat">
+              <span className="tile-label">Session Low</span>
+              <span className="tile-value" style={{ color: sessionLowV !== null ? voltageTone(sessionLowV) !== 'ok' ? TONE_COLOR[voltageTone(sessionLowV)] : undefined : undefined }}>
+                {sessionLowV !== null ? `${sessionLowV.toFixed(2)} V` : '—'}
+              </span>
             </div>
-          )}
+            <div className="battery-stat">
+              <span className="tile-label">Sag (peak–now)</span>
+              <span className="tile-value" style={{ color: sagV !== null && sagV > 0.1 ? TONE_COLOR[sagTone] : undefined }}>
+                {sagV !== null ? `${sagV.toFixed(2)} V` : '—'}
+              </span>
+            </div>
+            <div className="battery-stat" style={{ gridColumn: 'span 2' }}>
+              <span className="tile-label">Session High</span>
+              <span className="tile-value">
+                {sessionHighV !== null ? `${sessionHighV.toFixed(2)} V` : '—'}
+              </span>
+            </div>
+          </div>
         </>
       )}
+
+      {/* Always mounted so uPlot doesn't re-initialize on first data arrival */}
+      <div className="charts" style={stale ? { display: 'none' } : undefined}>
+        <Sparkline label="Voltage" unit="V" color={barColor} data={voltageData} />
+        <Sparkline label="Current" unit="A" color="#38bdf8" data={currentData} />
+        <Sparkline label="Power"   unit="W" color="#c084fc" data={powerData} />
+      </div>
     </section>
   )
 })

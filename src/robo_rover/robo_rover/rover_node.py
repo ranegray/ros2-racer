@@ -8,6 +8,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
+from rcl_interfaces.msg import Log
 from sensor_msgs.msg import Imu, BatteryState
 from std_msgs.msg import Bool, Float32, Float32MultiArray
 from nav_msgs.msg import Odometry
@@ -100,6 +101,8 @@ class ArduPilotRoverNode(Node):
         self.speed_target_pub = self.create_publisher(Float32, 'rover/speed_target', sensor_qos)
         self.battery_pub = self.create_publisher(BatteryState, '/battery_state', 10)
         self.motor_temps_pub = self.create_publisher(Float32MultiArray, '/motor_temps', 10)
+        self.events_pub = self.create_publisher(Log, '/mavlink_events', 10)
+        self._prev_sensor_health: int | None = None
 
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -121,6 +124,7 @@ class ArduPilotRoverNode(Node):
         self.status_timer = self.create_timer(1.0, self.status_loop)
         self.battery_timer = self.create_timer(0.5, self.battery_loop)
         self.motor_temps_timer = self.create_timer(0.5, self.motor_temps_loop)
+        self.statustext_timer = self.create_timer(0.1, self.statustext_loop)  # 10 Hz poll
         
         # Initialize connection
         self.get_logger().info('Initializing ArduPilot Rover Node...')
@@ -274,6 +278,18 @@ class ArduPilotRoverNode(Node):
                 0,
                 1,       # SYS_STATUS message ID
                 500000,  # 2 Hz = 500 000 µs
+                0, 0, 0, 0, 0
+            )
+
+            # Request ESC_TELEMETRY_1_TO_4 (msg ID 11030) at 2 Hz for motor temps
+            # Only works if ESC telemetry hardware is wired into the flight controller.
+            self.master.mav.command_long_send(
+                self.master.target_system,
+                self.master.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                11030,   # ESC_TELEMETRY_1_TO_4
+                500000,  # 2 Hz
                 0, 0, 0, 0, 0
             )
 
@@ -475,15 +491,68 @@ class ArduPilotRoverNode(Node):
         )
         self.battery_pub.publish(msg)
 
+        # Diff sensor health bitmask and emit events on changes
+        health = sys_status.onboard_control_sensors_health
+        enabled = sys_status.onboard_control_sensors_enabled
+        prev = self._prev_sensor_health
+        if prev is not None and health != prev:
+            for bit, name in self._SENSOR_NAMES.items():
+                if not (enabled & bit):
+                    continue  # sensor not enabled, skip
+                was_ok = bool(prev & bit)
+                now_ok = bool(health & bit)
+                if was_ok and not now_ok:
+                    self._publish_event(40, f'{name} UNHEALTHY')
+                elif not was_ok and now_ok:
+                    self._publish_event(20, f'{name} recovered')
+        self._prev_sensor_health = health
+
     def motor_temps_loop(self):
         if not self.connected:
             return
         esc = self.master.recv_match(type='ESC_TELEMETRY_1_TO_4', blocking=False)
         if esc is None:
             return
+        temps = [float(t) for t in esc.temperature]
+        self.get_logger().debug(f'ESC temps: {temps}')
         msg = Float32MultiArray()
-        msg.data = [float(t) for t in esc.temperature]  # degrees C, uint8 per ESC
+        msg.data = temps
         self.motor_temps_pub.publish(msg)
+
+    # MAV_SEVERITY → rcl_interfaces Log level
+    _MAV_SEV_TO_LEVEL = {0: 50, 1: 50, 2: 40, 3: 40, 4: 30, 5: 20, 6: 20, 7: 10}
+
+    # Sensors worth surfacing when they go unhealthy
+    _SENSOR_NAMES = {
+        0x00000001: '3D gyro',
+        0x00000002: '3D accel',
+        0x00000004: 'Magnetometer',
+        0x00000020: 'GPS',
+        0x00000400: 'Attitude',
+        0x00080000: 'Motor outputs',
+        0x00200000: 'Battery sensor',
+    }
+
+    def _publish_event(self, level: int, text: str) -> None:
+        log = Log()
+        log.stamp = self.get_clock().now().to_msg()
+        log.level = level
+        log.name = 'ArduPilot'
+        log.msg = text
+        self.events_pub.publish(log)
+
+    def statustext_loop(self) -> None:
+        if not self.connected:
+            return
+        while True:
+            st = self.master.recv_match(type='STATUSTEXT', blocking=False)
+            if st is None:
+                break
+            text = st.text.rstrip('\x00').strip()
+            if not text:
+                continue
+            level = self._MAV_SEV_TO_LEVEL.get(st.severity, 20)
+            self._publish_event(level, text)
 
     def destroy_node(self):
         """Clean up when node is destroyed"""

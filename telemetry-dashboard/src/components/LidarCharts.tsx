@@ -34,6 +34,13 @@ export const LidarCharts = memo(function LidarCharts({ lidarSamples, telSamples 
         <h2>Lidar Analysis</h2>
         <span className="badge">{lidarSamples.length} scans</span>
       </div>
+      <p className="panel-desc">
+        Raw scan stats vs the controller's processed front distance.
+        Divergence between "Fwd sector" and "Front dist" points to a filtering or obstacle-detection bug.
+        "Valid readings" = fraction of rays per scan that returned a finite range within the sensor's min/max bounds
+        (NaN, Inf, and out-of-range returns count as invalid). Drops below ~80% when the sensor is tilted,
+        partially blocked, or in an open area with nothing in range.
+      </p>
       <div className="charts">
         <Sparkline label="Fwd sector (raw scan)"   unit="m" color="#22c55e" data={fwdMean} />
         <Sparkline label="Front dist (controller)" unit="m" color="#f59e0b" data={frontDist} />

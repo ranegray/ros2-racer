@@ -219,7 +219,7 @@ class WallNavNode(Node):
         # disable. 15 degrees was sized for ~2.5ft (0.76m) windows at the
         # 0.8m setpoint -- large enough to catch wall edges adjacent to
         # the window when the diagonal beam punches through.
-        self.declare_parameter("scan_dilation_deg", 15.0)
+        self.declare_parameter("scan_dilation_deg", 20.0)
         # Front crash avoidance: two diagonal rays (+/-front_avoid_deg) detect
         # whether the approaching wall is angled or flat.
         #   asymmetry = front_R - front_L > 0  ->  wall like \  ->  steer right
@@ -228,16 +228,12 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
-        # Gap nudge: beams from 0° to -60° reading ≤ gap_fwd_thresh drive a
-        # proportional rightward nudge added to PD steering.
-        self.declare_parameter("gap_fwd_thresh", 3.0)             # m -- beam counts as blocked
-        self.declare_parameter("gap_nudge_max", 0.8)              # max nudge (all beams blocked)
         # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
         self.declare_parameter("gap_slow_thresh", 3.5)            # m -- start slowing
         self.declare_parameter("gap_slow_min_speed", 0.4)         # m/s floor while slowing
         self.declare_parameter("front_avoid_deg", 25.0)           # diagonal angle (deg)
         self.declare_parameter("front_avoid_min_asym", 0.15)      # m -- ignore below this
-        self.declare_parameter("front_avoid_kp", 0.3)
+        self.declare_parameter("front_avoid_kp", 0.33)
         self.declare_parameter("front_avoid_kd", 2.8)
         self.declare_parameter("front_avoid_d_alpha", 0.8)        # D-term low-pass
         self.declare_parameter("avoid_max_speed", 0.7)            # m/s cap during any avoid
@@ -451,19 +447,6 @@ class WallNavNode(Node):
 
         # --- Gap threading -------------------------------------------------------
         # Gap nudge: sample beams from 0° to -60° in 10° steps.
-        # Count how many read ≤ gap_fwd_thresh — the fraction drives a
-        # rightward nudge added to the final PD steering output.
-        gap_fwd_thresh = self.get_parameter("gap_fwd_thresh").value
-        gap_nudge_max = self.get_parameter("gap_nudge_max").value
-        _gap_angles = [6, 5, 4, 3, 2, 1, 0]
-        _gap_blocked = sum(
-            1 for a in _gap_angles
-            if (lambda r: math.isfinite(r) and r <= gap_fwd_thresh)(
-                self._ray_at_angle(msg, math.radians(a), math.radians(5.0))
-            )
-        )
-        gap_nudge = (_gap_blocked / len(_gap_angles)) * gap_nudge_max
-
         # --- Front crash avoidance -----------------------------------------------
         # Two diagonal rays at +/-front_avoid_deg measure wall angle.
         # asymmetry = front_L - front_R (matches sign convention: sign*asym → correct angular.z):
@@ -735,8 +718,6 @@ class WallNavNode(Node):
         # it's applied after the clamp.
         steering = sign * steering
         steering = max(-max_steer, min(max_steer, steering)) + bias
-        if self._avoid_confirm == 0:
-            steering += gap_nudge
 
         # Ease off the throttle when the wall is swinging away (corner/jut).
         speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)

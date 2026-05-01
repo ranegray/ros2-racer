@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as ROSLIB from "roslib";
 import { BatteryPanel } from "./components/BatteryPanel";
 import { MotorHeatPanel } from "./components/MotorHeatPanel";
@@ -120,6 +120,8 @@ function App() {
     const [speedArrivedAt, setSpeedArrivedAt] = useState(0);
     const speedBufferRef = useRef<SpeedSample[]>([]);
     const [speedSamples, setSpeedSamples] = useState<SpeedSample[]>([]);
+    const [slamState, setSlamState] = useState<string | null>(null);
+    const rosRef = useRef<ROSLIB.Ros | null>(null);
     // Camera frames bypass React state: at 30 Hz, routing ~20 KB Uint8Arrays
     // through setState ramps Chrome's tab memory by tens of MB/s (off-heap,
     // invisible to JS heap snapshots — likely React retaining state snapshots
@@ -134,6 +136,7 @@ function App() {
 
     useEffect(() => {
         const ros = new ROSLIB.Ros({ url: rosUrl });
+        rosRef.current = ros;
         let reconnectTimer: number | null = null;
         let disposed = false;
 
@@ -392,6 +395,15 @@ function App() {
             setMotorTempsArrivedAt(Date.now());
         });
 
+        const internalStateTopic = new ROSLIB.Topic({
+            ros,
+            name: "/telemetry/internal_state",
+            messageType: "std_msgs/msg/String",
+        });
+        internalStateTopic.subscribe((raw) => {
+            setSlamState((raw as unknown as { data: string }).data);
+        });
+
         const eventsTopic = new ROSLIB.Topic({
             ros,
             name: "/mavlink_events",
@@ -450,7 +462,9 @@ function App() {
 
         return () => {
             disposed = true;
+            rosRef.current = null;
             if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+            internalStateTopic.unsubscribe();
             telemetryTopic?.unsubscribe();
             cameraTopic?.unsubscribe();
             lineDebugTopic?.unsubscribe();
@@ -513,6 +527,36 @@ function App() {
         setLapTimes([]);
     };
 
+    const sendPathToPlanner = useCallback((poses: Array<{ x: number; y: number; qz: number; qw: number }>) => {
+        const ros = rosRef.current;
+        if (!ros) return;
+        const topic = new ROSLIB.Topic({ ros, name: "/dashboard/path_override", messageType: "nav_msgs/msg/Path" });
+        topic.publish(new ROSLIB.Message({
+            header: { stamp: { sec: 0, nanosec: 0 }, frame_id: "map" },
+            poses: poses.map((p) => ({
+                header: { stamp: { sec: 0, nanosec: 0 }, frame_id: "map" },
+                pose: {
+                    position: { x: p.x, y: p.y, z: 0 },
+                    orientation: { x: 0, y: 0, z: p.qz, w: p.qw },
+                },
+            })),
+        }));
+    }, []);
+
+    const confirmRace = useCallback(() => {
+        const ros = rosRef.current;
+        if (!ros) return;
+        const topic = new ROSLIB.Topic({ ros, name: "/slam_coordinator/confirm", messageType: "std_msgs/msg/Empty" });
+        topic.publish(new ROSLIB.Message({}));
+    }, []);
+
+    const slamDisplay = !slamState ? null
+        : slamState.startsWith("READY") ? "Ready to race"
+        : slamState.startsWith("SAVING") ? "Saving…"
+        : slamState === "RACING" ? "Racing"
+        : slamState === "mapping" ? null   // normal, don't clutter header
+        : slamState;
+
     const telemetryStale =
         telemetryArrivedAt === 0 ||
         now - telemetryArrivedAt > TELEMETRY_STALE_MS;
@@ -531,6 +575,16 @@ function App() {
                         >
                             telemetry · {telemetryAge}s ago
                         </span>
+                    )}
+                    {slamDisplay && (
+                        <span className={`badge ${slamDisplay === "Racing" ? "badge-live" : slamDisplay === "Ready to race" ? "badge-warn" : ""}`}>
+                            {slamDisplay}
+                        </span>
+                    )}
+                    {slamState?.startsWith("READY") && (
+                        <button className="confirm-race-btn" onClick={confirmRace}>
+                            Confirm Race
+                        </button>
                     )}
                     <div
                         className={`connection-status ${connected ? "connected" : "disconnected"}`}
@@ -598,7 +652,7 @@ function App() {
                     format={lineDebugFormat}
                     arrivedAt={lineDebugArrivedAt}
                 />
-                <PathInspectorPanel />
+                <PathInspectorPanel onSendPath={sendPathToPlanner} />
             </div>
 
             <RawJson msg={latest} />

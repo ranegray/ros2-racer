@@ -138,13 +138,18 @@ function drawPath(canvas: HTMLCanvasElement, poses: Pose[], color: string) {
   ctx.fill()
 }
 
+type Props = {
+  onSendPath?: (poses: Pose[]) => void
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
-export const PathInspectorPanel = memo(function PathInspectorPanel() {
+export const PathInspectorPanel = memo(function PathInspectorPanel({ onSendPath }: Props) {
   const [fileName, setFileName]         = useState<string | null>(null)
   const [original, setOriginal]         = useState<Pose[]>([])
   const [processed, setProcessed]       = useState<Pose[]>([])
   const [stats, setStats]               = useState<string | null>(null)
   const [showInterp, setShowInterp]     = useState(false)
+  const [sent, setSent]                 = useState(false)
   const canvasRef                       = useRef<HTMLCanvasElement | null>(null)
   const posesRef                        = useRef<Pose[]>([])
 
@@ -173,6 +178,7 @@ export const PathInspectorPanel = memo(function PathInspectorPanel() {
     const file = e.target.files?.[0]
     if (!file) return
     setFileName(file.name)
+    setSent(false)
     const reader = new FileReader()
     reader.onload = (ev) => {
       const text = ev.target?.result as string
@@ -194,9 +200,16 @@ export const PathInspectorPanel = memo(function PathInspectorPanel() {
     posesRef.current = looped
     setProcessed(looped)
     setShowInterp(true)
+    setSent(false)
     setStats(
       `${original.length} → ${looped.length} poses  ·  +${added} gap-fill  ·  loop ${closed ? 'closed' : 'gap > 1 m, not closed'}`
     )
+  }
+
+  const onSend = () => {
+    if (!onSendPath || processed.length === 0) return
+    onSendPath(processed)
+    setSent(true)
   }
 
   const onDownload = () => {
@@ -254,6 +267,16 @@ export const PathInspectorPanel = memo(function PathInspectorPanel() {
             onClick={() => { setShowInterp(false); posesRef.current = [] }}
           >
             Show original
+          </button>
+        )}
+
+        {showInterp && onSendPath && (
+          <button
+            className={`path-action-btn ${sent ? 'path-action-sent' : 'path-action-primary'}`}
+            onClick={onSend}
+            title="Publish interpolated path to /dashboard/path_override — planner will replan immediately"
+          >
+            {sent ? 'Sent ✓' : 'Send to planner'}
           </button>
         )}
 

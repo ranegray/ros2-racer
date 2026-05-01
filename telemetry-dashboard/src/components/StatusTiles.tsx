@@ -4,6 +4,8 @@ import type { RacerTelemetry } from '../telemetry'
 type Props = {
   connected: boolean
   latest: RacerTelemetry | null
+  lapMs: number | null
+  onLapReset: () => void
 }
 
 type Tone = 'ok' | 'warn' | 'bad' | 'idle'
@@ -32,6 +34,14 @@ function stateTone(v: string | undefined): Tone {
   return 'ok'
 }
 
+function formatLap(ms: number): string {
+  const totalS = Math.floor(ms / 1000)
+  const m = Math.floor(totalS / 60)
+  const s = totalS % 60
+  const tenths = Math.floor((ms % 1000) / 100)
+  return `${m}:${s.toString().padStart(2, '0')}.${tenths}`
+}
+
 function Tile({ label, value, tone }: { label: string; value: string; tone: Tone }) {
   return (
     <div className={`tile tile-${tone}`}>
@@ -41,7 +51,7 @@ function Tile({ label, value, tone }: { label: string; value: string; tone: Tone
   )
 }
 
-export const StatusTiles = memo(function StatusTiles({ connected, latest }: Props) {
+export const StatusTiles = memo(function StatusTiles({ connected, latest, lapMs, onLapReset }: Props) {
   const tone: Tone = connected ? 'ok' : 'bad'
   return (
     <div className="tiles">
@@ -70,6 +80,14 @@ export const StatusTiles = memo(function StatusTiles({ connected, latest }: Prop
         }
         tone={frontDistanceTone(latest?.front_distance)}
       />
+      <div
+        className={`tile ${lapMs !== null ? 'tile-ok' : 'tile-idle'} tile-lap`}
+        onClick={lapMs !== null ? onLapReset : undefined}
+        title={lapMs !== null ? 'Click to reset' : 'Waiting for motion…'}
+      >
+        <span className="tile-label">Lap</span>
+        <span className="tile-value">{lapMs !== null ? formatLap(lapMs) : '—'}</span>
+      </div>
     </div>
   )
 })

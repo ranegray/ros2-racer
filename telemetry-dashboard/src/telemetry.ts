@@ -36,6 +36,18 @@ export type RacerTelemetry = {
   obstacle_detection: string
 }
 
+export type BatteryState = {
+  header: { stamp: RosTime; frame_id: string }
+  voltage: number     // V
+  current: number     // A  (NaN if not measured)
+  percentage: number  // 0.0–1.0 (NaN if not estimated)
+}
+
+export type Odometry = {
+  header: { stamp: RosTime; frame_id: string }
+  twist: { twist: { linear: RosVec3; angular: RosVec3 } }
+}
+
 export type RosPoint2D = { x: number; y: number }
 
 export type RosPath = {

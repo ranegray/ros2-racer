@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, BatteryState
 from std_msgs.msg import Bool, Float32
 from nav_msgs.msg import Odometry
 import time
@@ -98,6 +98,7 @@ class ArduPilotRoverNode(Node):
         # vs setpoint in the dashboard regardless of whether the loop is active.
         self.speed_pub = self.create_publisher(Float32, 'rover/speed', sensor_qos)
         self.speed_target_pub = self.create_publisher(Float32, 'rover/speed_target', sensor_qos)
+        self.battery_pub = self.create_publisher(BatteryState, '/battery_state', 10)
 
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -117,6 +118,7 @@ class ArduPilotRoverNode(Node):
         self.imu_timer = self.create_timer(
             1.0 / self.imu_freq, self.imu_loop)
         self.status_timer = self.create_timer(1.0, self.status_loop)
+        self.battery_timer = self.create_timer(1.0, self.battery_loop)
         
         # Initialize connection
         self.get_logger().info('Initializing ArduPilot Rover Node...')
@@ -441,6 +443,25 @@ class ArduPilotRoverNode(Node):
                 # Update armed status from heartbeat
                 self.armed = bool(heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
     
+    def battery_loop(self):
+        if not self.connected:
+            return
+        sys_status = self.master.recv_match(type='SYS_STATUS', blocking=False)
+        if sys_status is None:
+            return
+        msg = BatteryState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = sys_status.voltage_battery / 1000.0
+        msg.current = (
+            sys_status.current_battery / 100.0
+            if sys_status.current_battery >= 0 else float('nan')
+        )
+        msg.percentage = (
+            sys_status.battery_remaining / 100.0
+            if sys_status.battery_remaining >= 0 else float('nan')
+        )
+        self.battery_pub.publish(msg)
+
     def destroy_node(self):
         """Clean up when node is destroyed"""
         self.get_logger().info('Shutting down rover node...')

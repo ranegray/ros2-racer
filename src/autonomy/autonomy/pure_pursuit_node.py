@@ -222,9 +222,9 @@ class PurePursuitNode(Node):
         cmd.angular.z = angular_z
         self._cmd_pub.publish(cmd)
 
-        self.get_logger().debug(
+        self.get_logger().info(
             f"α={math.degrees(alpha):.1f}° δ={math.degrees(delta):.1f}° "
-            f"ω={angular_z:.2f}"
+            f"ω={angular_z:.2f} v={v:.2f} idx={self._closest_idx % n}/{n}"
         )
 
 

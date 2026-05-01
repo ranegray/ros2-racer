@@ -490,14 +490,16 @@ class WallNavNode(Node):
                         )
                         self._prev_d_asymmetry = d_asym
                         self._prev_asymmetry = asymmetry
+                        # Flipped proportion: flat wall (small asymmetry) = hard turn,
+                        # angled wall (large asymmetry) = gentle steer.
+                        # Direction preserved: sign follows asymmetry (toward larger diagonal).
+                        norm = min(abs(asymmetry), 2.0) / 2.0
+                        inv_asym = math.copysign(1.0 - norm, asymmetry)
                         avoid_steer = (
-                            avoid_kp * asymmetry * (1.0 + proximity)
+                            avoid_kp * inv_asym * (1.0 + proximity)
                             - avoid_kd * d_asym
                         )
-                        if fwd < avoid_crash_close:
-                            avoid_steer = max(-crash_left_max, min(max_steer_v, avoid_steer))
-                        else:
-                            avoid_steer = max(0.0, min(max_steer_v, avoid_steer))
+                        avoid_steer = max(-max_steer_v, min(max_steer_v, avoid_steer))
                         avoid_steer += bias
                         cmd = Twist()
                         cmd.linear.x = float(avoid_speed)

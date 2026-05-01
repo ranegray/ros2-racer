@@ -6,7 +6,7 @@
 
 ```bash
 # terminal 1:
-ros2 launch rosbridge_server rosbridge_websocket_launch.xml address:=0.0.0.0 # exposes ROS2 topics over WebSocket
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml # exposes ROS2 topics over WebSocket
 # terminal 2:
 ros2 launch telemetry telemetry_launch.py # subscribes to telemetry and publishes to rosbridge
 ```

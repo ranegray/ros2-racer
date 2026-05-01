@@ -51,33 +51,38 @@ export const BatteryPanel = memo(function BatteryPanel({ battery, arrivedAt, sta
         </span>
       </div>
 
-      <div className="battery-bar-track">
-        <div
-          className="battery-bar-fill"
-          style={{ width: fillFrac !== null ? `${fillFrac * 100}%` : '0%', background: barColor }}
-        />
-      </div>
-
-      <div className="battery-stats">
-        <div className="battery-stat">
-          <span className="tile-label">Voltage</span>
-          <span className="tile-value" style={{ color: barColor }}>
-            {v !== null ? `${v.toFixed(2)} V` : '—'}
-          </span>
-        </div>
-        <div className="battery-stat">
-          <span className="tile-label">Charge</span>
-          <span className="tile-value" style={{ color: barColor }}>
-            {pct !== null ? `${Math.round(pct * 100)} %` : fillFrac !== null ? `~${Math.round(fillFrac * 100)} %` : '—'}
-          </span>
-        </div>
-        <div className="battery-stat">
-          <span className="tile-label">Current</span>
-          <span className="tile-value">
-            {amps !== null ? `${amps.toFixed(1)} A` : '—'}
-          </span>
-        </div>
-      </div>
+      {stale ? (
+        <div className="battery-placeholder">Waiting for /battery_state…</div>
+      ) : (
+        <>
+          <div className="battery-bar-track">
+            <div
+              className="battery-bar-fill"
+              style={{ width: fillFrac !== null ? `${fillFrac * 100}%` : '0%', background: barColor }}
+            />
+          </div>
+          <div className="battery-stats">
+            <div className="battery-stat">
+              <span className="tile-label">Voltage</span>
+              <span className="tile-value" style={{ color: barColor }}>
+                {v !== null ? `${v.toFixed(2)} V` : '—'}
+              </span>
+            </div>
+            <div className="battery-stat">
+              <span className="tile-label">Charge</span>
+              <span className="tile-value" style={{ color: barColor }}>
+                {pct !== null ? `${Math.round(pct * 100)} %` : fillFrac !== null ? `~${Math.round(fillFrac * 100)} %` : '—'}
+              </span>
+            </div>
+            <div className="battery-stat">
+              <span className="tile-label">Current</span>
+              <span className="tile-value">
+                {amps !== null ? `${amps.toFixed(1)} A` : '—'}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   )
 })

@@ -218,11 +218,6 @@ export const MapPanel = memo(function MapPanel({
             path · {plannedPath.poses.length} pts
           </span>
         )}
-        {inflatedMap && (
-          <span className="badge badge-live" style={{ marginLeft: 6, color: '#ff6060' }}>
-            inflated
-          </span>
-        )}
       </div>
       <div className="map-frame">
         <canvas ref={canvasRef} />

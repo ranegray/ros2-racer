@@ -46,7 +46,7 @@ function Tile({ label, value, tone }: { label: string; value: string; tone: Tone
   return (
     <div className={`tile tile-${tone}`}>
       <span className="tile-label">{label}</span>
-      <span className="tile-value">{value}</span>
+      <span className="tile-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
     </div>
   )
 }
@@ -81,7 +81,7 @@ export const StatusTiles = memo(function StatusTiles({ connected, latest, lapMs,
         tone={frontDistanceTone(latest?.front_distance)}
       />
       <div
-        className={`tile ${lapMs !== null ? 'tile-ok' : 'tile-idle'} tile-lap`}
+        className={`tile ${lapMs === null ? 'tile-idle' : lapMs >= 180_000 ? 'tile-bad' : 'tile-ok'} tile-lap`}
         onClick={lapMs !== null ? onLapReset : undefined}
         title={lapMs !== null ? 'Click to reset' : 'Waiting for motion…'}
       >

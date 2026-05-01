@@ -66,6 +66,7 @@ function App() {
   const lapStartMsRef = useRef<number | null>(null)
   lapStartMsRef.current = lapStartMs
   const motionCountRef = useRef(0)
+  const isArmedRef = useRef(false)
   const [battery, setBattery] = useState<BatteryState | null>(null)
   const [batteryArrivedAt, setBatteryArrivedAt] = useState(0)
   const bufferRef = useRef<Sample[]>([])
@@ -109,6 +110,7 @@ function App() {
         })
     telemetryTopic?.subscribe((raw) => {
       const msg = raw as unknown as RacerTelemetry
+      if (msg.armed) isArmedRef.current = true
       setLatest(msg)
       setTelemetryArrivedAt(Date.now())
       const next = bufferRef.current.slice(-(BUFFER_LEN - 1))
@@ -230,8 +232,8 @@ function App() {
     odomTopic.subscribe((raw) => {
       const msg = raw as unknown as Odometry
       const vx = msg.twist?.twist?.linear?.x ?? 0
-      // Require 3 consecutive readings above 0.1 m/s to filter startup noise
-      if (Math.abs(vx) > 0.1) {
+      // Only start timer once armed + 3 consecutive readings > 0.1 m/s
+      if (isArmedRef.current && Math.abs(vx) > 0.1) {
         motionCountRef.current += 1
         if (motionCountRef.current >= 3 && lapStartMsRef.current === null) {
           setLapStartMs(Date.now())

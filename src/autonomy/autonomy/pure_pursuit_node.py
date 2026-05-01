@@ -31,7 +31,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import String
 import tf2_ros
@@ -71,11 +71,13 @@ class PurePursuitNode(Node):
         self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self._cmd_pub     = self.create_publisher(Twist, "cmd_vel", 10)
+        self._pose_pub    = self.create_publisher(PoseStamped, "/robot_pose_map", 10)
 
         self.create_subscription(String, "/slam_coordinator/mode", self._mode_cb, 10)
         self.create_subscription(Path, "/planned_path", self._path_cb, _LATCHED_QOS)
 
         self.create_timer(0.05, self._control_loop)  # 20 Hz
+        self.create_timer(0.1, self._pose_tick)      # 10 Hz pose republish
         self.get_logger().info(
             f"Pure pursuit ready — L_d={self._L_d} m, speed={self._speed} m/s. "
             f"Waiting for racing mode."
@@ -136,6 +138,21 @@ class PurePursuitNode(Node):
             )
         except Exception as e:
             self.get_logger().error(f"Failed to load fallback path: {e}")
+
+    def _pose_tick(self):
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
+            return
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "map"
+        msg.pose.position.x = tf.transform.translation.x
+        msg.pose.position.y = tf.transform.translation.y
+        msg.pose.orientation.z = tf.transform.rotation.z
+        msg.pose.orientation.w = tf.transform.rotation.w
+        self._pose_pub.publish(msg)
 
     # ------------------------------------------------------------------
     # Control loop

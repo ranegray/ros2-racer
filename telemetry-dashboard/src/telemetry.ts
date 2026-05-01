@@ -54,6 +54,10 @@ export type Odometry = {
 
 export type RosPoint2D = { x: number; y: number }
 
+export type RobotPose = {
+  pose: { position: { x: number; y: number }; orientation: { z: number; w: number } }
+}
+
 export type RosPath = {
   header: { stamp: RosTime; frame_id: string }
   poses: Array<{

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import type { OccupancyGrid, RosPath } from '../telemetry'
+import type { OccupancyGrid, RobotPose, RosPath } from '../telemetry'
 
 type Props = {
   map: OccupancyGrid | null
@@ -8,6 +8,7 @@ type Props = {
   plannedPath?: RosPath | null
   inflatedMap?: OccupancyGrid | null
   recordedPath?: RosPath | null
+  robotPose?: RobotPose | null
 }
 
 const BG = '#0b0f14'
@@ -22,6 +23,7 @@ function draw(
   plannedPath: RosPath | null | undefined,
   inflatedMap: OccupancyGrid | null | undefined,
   recordedPath: RosPath | null | undefined,
+  robotPose: RobotPose | null | undefined,
 ) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -154,6 +156,36 @@ function draw(
     ctx.fill()
     ctx.restore()
   }
+
+  // Robot position: filled white circle + heading arrow
+  if (robotPose) {
+    const { x, y } = robotPose.pose.position
+    const { z: qz, w: qw } = robotPose.pose.orientation
+    const yaw = 2.0 * Math.atan2(qz, qw)
+    const cx = toCanvasX(x)
+    const cy = toCanvasY(y)
+    const r = 6
+
+    ctx.save()
+    // Body
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#000000'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+
+    // Heading arrow — canvas x+ is right, y+ is down; ROS yaw+ is CCW → flip y
+    const arrowLen = r + 8
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(cx + arrowLen * Math.cos(-yaw), cy + arrowLen * Math.sin(-yaw))
+    ctx.strokeStyle = '#ff3300'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.restore()
+  }
 }
 
 export const MapPanel = memo(function MapPanel({
@@ -163,28 +195,31 @@ export const MapPanel = memo(function MapPanel({
   plannedPath,
   inflatedMap,
   recordedPath,
+  robotPose,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const mapRef = useRef<OccupancyGrid | null>(map)
   const pathRef = useRef<RosPath | null | undefined>(plannedPath)
   const inflatedRef = useRef<OccupancyGrid | null | undefined>(inflatedMap)
   const recordedRef = useRef<RosPath | null | undefined>(recordedPath)
+  const poseRef = useRef<RobotPose | null | undefined>(robotPose)
   mapRef.current = map
   pathRef.current = plannedPath
   inflatedRef.current = inflatedMap
   recordedRef.current = recordedPath
+  poseRef.current = robotPose
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    draw(canvas, map, plannedPath, inflatedMap, recordedPath)
-  }, [map, plannedPath, inflatedMap, recordedPath])
+    draw(canvas, map, plannedPath, inflatedMap, recordedPath, robotPose)
+  }, [map, plannedPath, inflatedMap, recordedPath, robotPose])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current, recordedRef.current))
+    const ro = new ResizeObserver(() => draw(canvas, mapRef.current, pathRef.current, inflatedRef.current, recordedRef.current, poseRef.current))
     ro.observe(canvas)
     return () => ro.disconnect()
   }, [])
@@ -220,7 +255,8 @@ export const MapPanel = memo(function MapPanel({
           <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#00ff88' }} />Start</span>
           <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff4444' }} />End</span>
           <span className="map-legend-item"><span className="map-legend-line" style={{ background: '#00e5ff' }} />Plan</span>
-          <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff9900' }} />Recorded</span>
+          {!robotPose && <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ff9900' }} />Recorded</span>}
+          {robotPose && <span className="map-legend-item"><span className="map-legend-dot" style={{ background: '#ffffff' }} />Robot</span>}
         </div>
       )}
     </section>

@@ -22,6 +22,7 @@ import type {
     Odometry,
     OccupancyGrid,
     RacerTelemetry,
+    RobotPose,
     RosLogMsg,
     RosPath,
     Sample,
@@ -87,6 +88,7 @@ function App() {
     const [plannedPath, setPlannedPath] = useState<RosPath | null>(null);
     const [recordedPath, setRecordedPath] = useState<RosPath | null>(null);
     const [inflatedMap, setInflatedMap] = useState<OccupancyGrid | null>(null);
+    const [robotPose, setRobotPose] = useState<RobotPose | null>(null);
     const [telemetryArrivedAt, setTelemetryArrivedAt] = useState(0);
     const [now, setNow] = useState(() => Date.now());
     const [lapStartMs, setLapStartMs] = useState<number | null>(null);
@@ -304,6 +306,18 @@ function App() {
         });
         inflatedMapTopic.subscribe((raw) => {
             setInflatedMap(raw as unknown as OccupancyGrid);
+        });
+
+        const robotPoseTopic = new ROSLIB.Topic({
+            ros,
+            name: "/robot_pose_map",
+            messageType: "geometry_msgs/msg/PoseStamped",
+            compression: "cbor",
+            queue_length: 1,
+            throttle_rate: 100,
+        });
+        robotPoseTopic.subscribe((raw) => {
+            setRobotPose(raw as unknown as RobotPose);
         });
 
         const odomTopic = new ROSLIB.Topic({
@@ -544,7 +558,8 @@ function App() {
                     arrivedAt={mapArrivedAt}
                     plannedPath={plannedPath}
                     inflatedMap={inflatedMap}
-                    recordedPath={recordedPath}
+                    recordedPath={plannedPath ? null : recordedPath}
+                    robotPose={robotPose}
                 />
                 <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
                 <LidarCharts lidarSamples={lidarSamples} telSamples={samples} />

@@ -24,10 +24,13 @@ stop_sign:
   # Shape filtering — sized for paper-printed signs (~19 cm flat-to-flat)
   min_area_px: 600             # ~25 px square; ~19 cm sign at ~3 m
   max_area_px: 50000           # caps at ~225 px square; ~19 cm sign at ~0.5 m
-  aspect_min: 0.7
-  aspect_max: 1.4
-  fill_min: 0.70
-  fill_max: 0.92
+  # Tightened toward the regular-octagon ideal: head-on aspect ~1.0 (the live
+  # sign measures 1.02), fill ~0.83 (live sign ~0.82). Bounds keep ~20 %
+  # headroom in either direction.
+  aspect_min: 0.80
+  aspect_max: 1.25
+  fill_min: 0.74
+  fill_max: 0.90
 
   # Distance estimation. The algorithm only sees the red octagon flat-to-flat,
   # not the white paper margin. Calibrated against ground truth: a sign printed

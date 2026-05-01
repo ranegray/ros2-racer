@@ -12,6 +12,7 @@ CLI:
         --output ./output_debug.mp4 \\
         [--display] [--no-overlay] [--focal-px 600]
 """
+#python3 -m stop_sign.visualizer --input realsense --config config/stop_sign.yaml
 import argparse
 import glob
 import json

@@ -494,7 +494,7 @@ class WallNavNode(Node):
                         # angled wall (large asymmetry) = gentle steer.
                         # Direction preserved: sign follows asymmetry (toward larger diagonal).
                         norm = min(abs(asymmetry), 2.0) / 2.0
-                        inv_asym = math.copysign(1.0 - norm, -asymmetry)
+                        inv_asym = math.copysign(1.0 - norm, asymmetry)
                         avoid_steer = (
                             avoid_kp * inv_asym * (1.0 + proximity)
                             - avoid_kd * d_asym

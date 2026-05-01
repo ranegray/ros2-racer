@@ -80,7 +80,6 @@ class WallNavNode(Node):
         self._prev_asymmetry = 0.0
         self._prev_d_asymmetry = 0.0
         self._avoid_confirm = 0
-        self._gap_confirm = 0
 
     def _setup_parameters(self):
         # Tunable live via `ros2 param set /wall_nav_node <name> <value>`.
@@ -229,10 +228,10 @@ class WallNavNode(Node):
         self.declare_parameter("front_avoid_slow_thresh", 2.0)    # m -- start slowing
         self.declare_parameter("front_avoid_thresh", 1.5)        # m -- start steering (wall avoids)
         self.declare_parameter("avoid_confirm_scans", 2)          # scans to confirm (wall avoids)
-        # Gap threading: fwd blocked + right diagonal open → steer right.
-        self.declare_parameter("gap_fwd_thresh", 3.5)             # m -- fwd counts as blocked
-        self.declare_parameter("gap_diag_mult", 1.3)              # diag_R must be > near_R * this
-        self.declare_parameter("gap_confirm_scans", 2)            # scans to confirm
+        # Gap nudge: beams from 0° to -60° reading ≤ gap_fwd_thresh drive a
+        # proportional rightward nudge added to PD steering.
+        self.declare_parameter("gap_fwd_thresh", 3.5)             # m -- beam counts as blocked
+        self.declare_parameter("gap_nudge_max", 1.0)              # max nudge (all beams blocked)
         # Narrow forward speed cap: slow down when ±2° cone sees wall within this range.
         self.declare_parameter("gap_slow_thresh", 3.5)            # m -- start slowing
         self.declare_parameter("gap_slow_min_speed", 0.4)         # m/s floor while slowing
@@ -451,36 +450,19 @@ class WallNavNode(Node):
             v_max = gap_slow_min + t * (v_max - gap_slow_min)
 
         # --- Gap threading -------------------------------------------------------
-        # Condition: fwd blocked (< gap_fwd_thresh) AND right diagonal open
-        # (diag_R > fwd * gap_diag_mult). Confirms N scans then steers right.
+        # Gap nudge: sample beams from 0° to -60° in 10° steps.
+        # Count how many read ≤ gap_fwd_thresh — the fraction drives a
+        # rightward nudge added to the final PD steering output.
         gap_fwd_thresh = self.get_parameter("gap_fwd_thresh").value
-        gap_diag_mult = self.get_parameter("gap_diag_mult").value
-        gap_confirm_scans = self.get_parameter("gap_confirm_scans").value
-        # Sample near-center (-2°) and far-diagonal (-60°) rays.
-        # As robot approaches a gap: near ray hits the wall (~fwd), far ray
-        # stays open (large). When far ray also closes, the gap has passed.
-        near_R = self._ray_at_angle(msg, math.radians(-2.0), math.radians(3.0))
-        diag_R = self._ray_at_angle(msg, math.radians(-60.0), math.radians(5.0))
-        range_max = float(msg.range_max)
-        near_R = near_R if math.isfinite(near_R) else range_max
-        diag_R = diag_R if math.isfinite(diag_R) else range_max
-        # Near side blocked AND diagonal still open → gap to the right
-        near_blocked = near_R < gap_fwd_thresh
-        right_open = diag_R > near_R * gap_diag_mult
-        if near_blocked and right_open:
-            self._gap_confirm += 1
-        else:
-            self._gap_confirm = 0
-        if self._gap_confirm >= gap_confirm_scans:
-            self._gap_confirm = gap_confirm_scans  # stay armed
-            cmd = Twist()
-            cmd.linear.x = float(self.get_parameter("commit_speed").value)
-            cmd.angular.z = float(self.get_parameter("max_steering").value)
-            self.cmd_pub.publish(cmd)
-            self.get_logger().info(
-                f"GAP near={near_R:.2f}m diag={diag_R:.2f}m — steering right"
+        gap_nudge_max = self.get_parameter("gap_nudge_max").value
+        _gap_angles = [4, 3, 2, 1, 0]
+        _gap_blocked = sum(
+            1 for a in _gap_angles
+            if (lambda r: math.isfinite(r) and r <= gap_fwd_thresh)(
+                self._ray_at_angle(msg, math.radians(a), math.radians(5.0))
             )
-            return
+        )
+        gap_nudge = (_gap_blocked / len(_gap_angles)) * gap_nudge_max
 
         # --- Front crash avoidance -----------------------------------------------
         # Two diagonal rays at +/-front_avoid_deg measure wall angle.
@@ -752,7 +734,7 @@ class WallNavNode(Node):
         # Bias shifts the neutral point -- not part of the control effort, so
         # it's applied after the clamp.
         steering = sign * steering
-        steering = max(-max_steer, min(max_steer, steering)) + bias
+        steering = max(-max_steer, min(max_steer, steering)) + bias + gap_nudge
 
         # Ease off the throttle when the wall is swinging away (corner/jut).
         speed_scale = max(0.0, 1.0 - abs(alpha) / alpha_scale)

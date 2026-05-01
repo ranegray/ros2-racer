@@ -3,9 +3,7 @@ import type { LaserScan } from '../telemetry'
 
 type Props = {
   scan: LaserScan | null
-  /** wall-clock ms when the latest scan arrived (Date.now()) */
   arrivedAt: number
-  /** display radius in metres; points beyond are clipped */
   displayMax?: number
   stalenessMs?: number
 }
@@ -100,9 +98,6 @@ export const LidarPolar = memo(function LidarPolar({
     draw(canvas, scan, displayMax)
   }, [scan, displayMax])
 
-  // Repaint on resize so DPI/layout changes don't blur the canvas. Mount-only
-  // so we don't churn observers at scan frequency; the observer reads the
-  // latest scan from a ref when it fires.
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return

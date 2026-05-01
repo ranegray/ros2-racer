@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, BatteryState
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, Float32MultiArray
 from nav_msgs.msg import Odometry
 import time
 import threading
@@ -99,6 +99,7 @@ class ArduPilotRoverNode(Node):
         self.speed_pub = self.create_publisher(Float32, 'rover/speed', sensor_qos)
         self.speed_target_pub = self.create_publisher(Float32, 'rover/speed_target', sensor_qos)
         self.battery_pub = self.create_publisher(BatteryState, '/battery_state', 10)
+        self.motor_temps_pub = self.create_publisher(Float32MultiArray, '/motor_temps', 10)
 
         # Subscribers
         self.cmd_sub = self.create_subscription(
@@ -118,7 +119,8 @@ class ArduPilotRoverNode(Node):
         self.imu_timer = self.create_timer(
             1.0 / self.imu_freq, self.imu_loop)
         self.status_timer = self.create_timer(1.0, self.status_loop)
-        self.battery_timer = self.create_timer(1.0, self.battery_loop)
+        self.battery_timer = self.create_timer(0.5, self.battery_loop)
+        self.motor_temps_timer = self.create_timer(0.5, self.motor_temps_loop)
         
         # Initialize connection
         self.get_logger().info('Initializing ArduPilot Rover Node...')
@@ -264,8 +266,19 @@ class ArduPilotRoverNode(Node):
                 0, 0, 0, 0, 0
             )
             
+            # Request SYS_STATUS (msg ID 1) at 2 Hz for battery monitoring
+            self.master.mav.command_long_send(
+                self.master.target_system,
+                self.master.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                1,       # SYS_STATUS message ID
+                500000,  # 2 Hz = 500 000 µs
+                0, 0, 0, 0, 0
+            )
+
             self.get_logger().info(f'Requested IMU data at {self.imu_freq} Hz')
-            
+
         except Exception as e:
             self.get_logger().error(f'Failed to request IMU data: {e}')
     
@@ -461,6 +474,16 @@ class ArduPilotRoverNode(Node):
             if sys_status.battery_remaining >= 0 else float('nan')
         )
         self.battery_pub.publish(msg)
+
+    def motor_temps_loop(self):
+        if not self.connected:
+            return
+        esc = self.master.recv_match(type='ESC_TELEMETRY_1_TO_4', blocking=False)
+        if esc is None:
+            return
+        msg = Float32MultiArray()
+        msg.data = [float(t) for t in esc.temperature]  # degrees C, uint8 per ESC
+        self.motor_temps_pub.publish(msg)
 
     def destroy_node(self):
         """Clean up when node is destroyed"""

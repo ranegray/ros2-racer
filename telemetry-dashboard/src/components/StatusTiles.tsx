@@ -82,8 +82,8 @@ export const StatusTiles = memo(function StatusTiles({ connected, latest, lapMs,
       />
       <div
         className={`tile ${lapMs === null ? 'tile-idle' : lapMs >= 180_000 ? 'tile-bad' : 'tile-ok'} tile-lap`}
-        onClick={lapMs !== null ? onLapReset : undefined}
-        title={lapMs !== null ? 'Click to reset' : 'Waiting for motion…'}
+        onDoubleClick={lapMs !== null ? onLapReset : undefined}
+        title={lapMs !== null ? 'Double-click to reset' : 'Waiting for armed + motion…'}
       >
         <span className="tile-label">Lap</span>
         <span className="tile-value">{lapMs !== null ? formatLap(lapMs) : '—'}</span>

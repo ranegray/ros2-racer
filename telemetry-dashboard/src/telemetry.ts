@@ -43,6 +43,10 @@ export type BatteryState = {
   percentage: number  // 0.0–1.0 (NaN if not estimated)
 }
 
+export type MotorTemps = {
+  data: number[]  // °C per ESC, up to 4 elements
+}
+
 export type Odometry = {
   header: { stamp: RosTime; frame_id: string }
   twist: { twist: { linear: RosVec3; angular: RosVec3 } }
@@ -82,6 +86,22 @@ export type Sample = {
 }
 
 export const BUFFER_LEN = 200
+
+export type BatterySample = {
+  t: number
+  voltage: number
+  current: number
+  power: number
+}
+export const BATTERY_BUFFER_LEN = 200
+
+export type LidarSample = {
+  t: number
+  minRange: number   // minimum valid range in full scan
+  fwdMean: number    // mean range of ±30° forward sector
+  validPct: number   // fraction of readings that are finite & in-range (0–1)
+}
+export const LIDAR_BUFFER_LEN = 200
 
 export function stampToSeconds(stamp: RosTime): number {
   return stamp.sec + stamp.nanosec * 1e-9

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import * as ROSLIB from 'roslib'
 import { BatteryPanel } from './components/BatteryPanel'
+import { MotorHeatPanel } from './components/MotorHeatPanel'
 import { CameraPanel } from './components/CameraPanel'
 import { Charts } from './components/Charts'
+import { LidarCharts } from './components/LidarCharts'
 import { LidarPolar } from './components/LidarPolar'
 import { MapPanel } from './components/MapPanel'
 import { RawJson } from './components/RawJson'
 import { StatusTiles } from './components/StatusTiles'
-import type { BatteryState, CompressedImage, LaserScan, Odometry, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
-import { BUFFER_LEN, toSample } from './telemetry'
+import type { BatterySample, BatteryState, CompressedImage, LaserScan, LidarSample, MotorTemps, Odometry, OccupancyGrid, RacerTelemetry, RosPath, Sample } from './telemetry'
+import { BATTERY_BUFFER_LEN, BUFFER_LEN, LIDAR_BUFFER_LEN, toSample } from './telemetry'
 import './App.css'
 
 const DEFAULT_ROS_URL = 'ws://100.86.204.127:9090'
@@ -69,7 +71,13 @@ function App() {
   const isArmedRef = useRef(false)
   const [battery, setBattery] = useState<BatteryState | null>(null)
   const [batteryArrivedAt, setBatteryArrivedAt] = useState(0)
+  const [motorTemps, setMotorTemps] = useState<MotorTemps | null>(null)
+  const [motorTempsArrivedAt, setMotorTempsArrivedAt] = useState(0)
   const bufferRef = useRef<Sample[]>([])
+  const batteryBufferRef = useRef<BatterySample[]>([])
+  const [batterySamples, setBatterySamples] = useState<BatterySample[]>([])
+  const lidarBufferRef = useRef<LidarSample[]>([])
+  const [lidarSamples, setLidarSamples] = useState<LidarSample[]>([])
   // Camera frames bypass React state: at 30 Hz, routing ~20 KB Uint8Arrays
   // through setState ramps Chrome's tab memory by tens of MB/s (off-heap,
   // invisible to JS heap snapshots — likely React retaining state snapshots
@@ -168,8 +176,31 @@ function App() {
           throttle_rate: 200,
         })
     scanTopic?.subscribe((raw) => {
-      setScan(raw as unknown as LaserScan)
+      const msg = raw as unknown as LaserScan
+      setScan(msg)
       setScanArrivedAt(Date.now())
+      // Compute per-scan stats for time-series charts
+      const { ranges, angle_min, angle_increment, range_min, range_max } = msg
+      const FWD_HALF = Math.PI / 6  // ±30°
+      let totalValid = 0, globalMin = Infinity
+      let fwdSum = 0, fwdCount = 0
+      for (let i = 0; i < ranges.length; i++) {
+        const r = ranges[i]
+        if (!Number.isFinite(r) || r < range_min || r > range_max) continue
+        totalValid++
+        if (r < globalMin) globalMin = r
+        const a = angle_min + i * angle_increment
+        if (Math.abs(a) <= FWD_HALF) { fwdSum += r; fwdCount++ }
+      }
+      const lidarNext = lidarBufferRef.current.slice(-(LIDAR_BUFFER_LEN - 1))
+      lidarNext.push({
+        t: Date.now() / 1000,
+        minRange: globalMin === Infinity ? 0 : globalMin,
+        fwdMean: fwdCount > 0 ? fwdSum / fwdCount : 0,
+        validPct: ranges.length > 0 ? totalValid / ranges.length : 0,
+      })
+      lidarBufferRef.current = lidarNext
+      setLidarSamples(lidarNext)
     })
 
     const mapTopic = new ROSLIB.Topic({
@@ -249,11 +280,31 @@ function App() {
       messageType: 'sensor_msgs/msg/BatteryState',
       compression: 'cbor',
       queue_length: 1,
-      throttle_rate: 1000,
+      throttle_rate: 500,
     })
     batteryTopic.subscribe((raw) => {
-      setBattery(raw as unknown as BatteryState)
+      const msg = raw as unknown as BatteryState
+      setBattery(msg)
       setBatteryArrivedAt(Date.now())
+      const v = Number.isFinite(msg.voltage) && msg.voltage > 0 ? msg.voltage : 0
+      const i = Number.isFinite(msg.current) && msg.current >= 0 ? msg.current : 0
+      const next = batteryBufferRef.current.slice(-(BATTERY_BUFFER_LEN - 1))
+      next.push({ t: Date.now() / 1000, voltage: v, current: i, power: v * i })
+      batteryBufferRef.current = next
+      setBatterySamples(next)
+    })
+
+    const motorTempsTopic = new ROSLIB.Topic({
+      ros,
+      name: '/motor_temps',
+      messageType: 'std_msgs/msg/Float32MultiArray',
+      compression: 'cbor',
+      queue_length: 1,
+      throttle_rate: 500,
+    })
+    motorTempsTopic.subscribe((raw) => {
+      setMotorTemps(raw as unknown as MotorTemps)
+      setMotorTempsArrivedAt(Date.now())
     })
 
     return () => {
@@ -268,6 +319,7 @@ function App() {
       inflatedMapTopic.unsubscribe()
       odomTopic.unsubscribe()
       batteryTopic.unsubscribe()
+      motorTempsTopic.unsubscribe()
       ros.close()
     }
   }, [rosUrl, disableCamera, disableLineDebug, disableScan, disableTelemetry])
@@ -314,6 +366,12 @@ function App() {
       />
 
       <div className="dashboard-grid">
+        <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
+        <LidarCharts lidarSamples={lidarSamples} telSamples={samples} />
+        <Charts samples={samples} />
+        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} recordedPath={recordedPath} />
+        <BatteryPanel battery={battery} arrivedAt={batteryArrivedAt} samples={batterySamples} />
+        <MotorHeatPanel temps={motorTemps} arrivedAt={motorTempsArrivedAt} />
         <CameraPanel paintRef={cameraPaintRef} format={imageFormat} arrivedAt={imageArrivedAt} />
         <CameraPanel
           title="Line Debug"
@@ -321,10 +379,6 @@ function App() {
           format={lineDebugFormat}
           arrivedAt={lineDebugArrivedAt}
         />
-        <LidarPolar scan={scan} arrivedAt={scanArrivedAt} />
-        <Charts samples={samples} />
-        <MapPanel map={map} arrivedAt={mapArrivedAt} plannedPath={plannedPath} inflatedMap={inflatedMap} recordedPath={recordedPath} />
-        <BatteryPanel battery={battery} arrivedAt={batteryArrivedAt} />
       </div>
 
       <RawJson msg={latest} />

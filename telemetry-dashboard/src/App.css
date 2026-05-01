@@ -339,7 +339,7 @@
 
 .battery-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 
@@ -358,6 +358,52 @@
   font-family: var(--mono);
   font-size: 13px;
   min-height: 60px;
+}
+
+/* motor heat */
+.motor-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.motor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.motor-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.motor-bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.motor-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.4s ease, background 0.3s ease;
+}
+
+.motor-temp {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
 }
 
 /* raw json */

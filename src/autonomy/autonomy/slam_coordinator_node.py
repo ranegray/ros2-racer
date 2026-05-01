@@ -24,7 +24,7 @@ from datetime import datetime
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Empty
-from slam_toolbox.srv import SaveMap
+from slam_toolbox.srv import SaveMap, SerializePoseGraph
 
 
 MAP_DIR = '/home/pi/map'
@@ -41,6 +41,7 @@ class SlamCoordinatorNode(Node):
 
         self._mode = "mapping"
         self._map_saved = False
+        self._serialized_saved = False
         self._path_saved = False
         self._save_timestamp: str | None = None
         self._save_basename: str | None = None  # e.g. /home/pi/map/track_20260501_143022
@@ -69,6 +70,9 @@ class SlamCoordinatorNode(Node):
         self.create_timer(1.0, self._publish_mode)
 
         self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
+        self._serialize_client = self.create_client(
+            SerializePoseGraph, "/slam_toolbox/serialize_map"
+        )
 
         self.get_logger().info("SLAM coordinator started — mode: MAPPING")
 
@@ -90,6 +94,7 @@ class SlamCoordinatorNode(Node):
         self.get_logger().info("Transition requested — entering SAVING")
         self._mode = "saving"
         self._map_saved = False
+        self._serialized_saved = False
         self._path_saved = False
         self._save_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self._save_basename = os.path.join(
@@ -105,8 +110,10 @@ class SlamCoordinatorNode(Node):
         save_msg.data = f"save:{self._save_timestamp}"
         self._save_path_pub.publish(save_msg)
 
-        # Async map save
+        # Async saves: pgm/yaml (visualization, path_planner) and serialized
+        # posegraph/data (the format slam_toolbox localization mode loads).
         self._save_map()
+        self._serialize_map()
 
     # ------------------------------------------------------------------
     # Map save
@@ -140,12 +147,12 @@ class SlamCoordinatorNode(Node):
         self._map_saved = True
         self._check_ready()
 
-    def _update_map_symlinks(self):
-        """Point /home/pi/map/track.{pgm,yaml} at the just-saved timestamped pair."""
+    def _update_map_symlinks(self, exts: tuple[str, ...] = ("pgm", "yaml")):
+        """Point /home/pi/map/track.<ext> at the just-saved timestamped file(s)."""
         if not self._save_timestamp:
             return
         ts = self._save_timestamp
-        for ext in ("pgm", "yaml"):
+        for ext in exts:
             target = f"{MAP_LATEST_BASE}_{ts}.{ext}"  # relative to MAP_DIR
             link = os.path.join(MAP_DIR, f"{MAP_LATEST_BASE}.{ext}")
             try:
@@ -155,6 +162,46 @@ class SlamCoordinatorNode(Node):
                 self.get_logger().info(f"Updated symlink {link} → {target}")
             except OSError as e:
                 self.get_logger().error(f"Failed to update symlink {link}: {e}")
+
+    # ------------------------------------------------------------------
+    # Pose-graph serialization (required for slam_toolbox localization mode)
+    # ------------------------------------------------------------------
+
+    def _serialize_map(self):
+        if not self._serialize_client.service_is_ready():
+            self.get_logger().error(
+                "slam_toolbox/serialize_map not available — racing launch will "
+                "have no map. Proceeding so READY still triggers."
+            )
+            self._serialized_saved = True
+            self._check_ready()
+            return
+
+        req = SerializePoseGraph.Request()
+        req.filename = self._save_basename  # appends .posegraph and .data
+        future = self._serialize_client.call_async(req)
+        future.add_done_callback(self._serialize_done)
+        self.get_logger().info(
+            f"Serializing pose graph to {self._save_basename}.{{posegraph,data}}..."
+        )
+
+    def _serialize_done(self, future):
+        try:
+            result = future.result()
+            if result.result == 0:
+                self.get_logger().info(
+                    f"Pose graph serialized → {self._save_basename}.{{posegraph,data}}"
+                )
+            else:
+                self.get_logger().error(
+                    f"serialize_map returned result={result.result} — "
+                    f"racing launch will have no map"
+                )
+        except Exception as e:
+            self.get_logger().error(f"serialize_map exception: {e}")
+        self._update_map_symlinks(exts=("posegraph", "data"))
+        self._serialized_saved = True
+        self._check_ready()
 
     # ------------------------------------------------------------------
     # Path save confirmation
@@ -172,7 +219,7 @@ class SlamCoordinatorNode(Node):
     def _check_ready(self):
         if self._mode != "saving":
             return
-        if not (self._map_saved and self._path_saved):
+        if not (self._map_saved and self._serialized_saved and self._path_saved):
             return
 
         self._mode = "ready"

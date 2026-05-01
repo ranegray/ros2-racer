@@ -2,9 +2,9 @@
 """
 slam_racing.launch.py — Race on a previously-saved map.
 
-Loads /home/pi/map/track.{pgm,yaml} (symlinks point at the latest archive)
-in slam_toolbox localization mode and runs pure_pursuit on the saved path
-(~/.ros/recorded_path.yaml, also a symlink to the latest).
+Loads /home/pi/map/track.{posegraph,data} (symlinks point at the latest
+archive) in slam_toolbox localization mode and runs pure_pursuit on the
+saved path (~/.ros/recorded_path.yaml, also a symlink to the latest).
 
 Mirrors master_bringup's hardware/telemetry stack but:
   - slam_toolbox runs in LOCALIZATION mode (frozen map, never modified)
@@ -215,7 +215,7 @@ def generate_launch_description():
         speed_arg,
         path_file_arg,
 
-        LogInfo(msg='[slam_racing] Loading saved map at /home/pi/map/track.{pgm,yaml} (symlink → latest archive)'),
+        LogInfo(msg='[slam_racing] Loading saved map at /home/pi/map/track.{posegraph,data} (symlink → latest archive)'),
         LogInfo(msg='[slam_racing] After localization converges (~5s), run:'),
         LogInfo(msg='[slam_racing]   ros2 topic pub --once /slam_coordinator/mode std_msgs/msg/String "data: racing"'),
 
